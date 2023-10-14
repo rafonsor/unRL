@@ -255,3 +255,49 @@ class IncrementalMultiArmedBanditUCB(MultiArmedBanditBase):
         self.steps += 1
         self.counts = self.counts.at[action].add(1)
         self.estimates = self.estimates.at[action].add((reward - self.estimates[action]) / self.counts[action])
+
+
+class MultiArmedBanditThompson(MultiArmedBanditBase):
+    """Multi-armed Bandit for discrete Action space with Thompson sampling"""
+    counts: t.IntArray
+    estimates: t.FloatArray
+
+    POSITIVE = 0
+    NEGATIVE = 1
+
+    def set_state(self, counts: t.IntArray, estimates: t.FloatArray):
+        assert len(counts) == self.config.k
+        assert all(c >= 0 for c in counts)
+        assert len(estimates) == self.config.k
+        self.counts = counts.copy()
+        self.estimates = estimates.copy()
+
+    def reset_state(self):
+        # Two-dimensional, tracks occurrences of "positive" and "negative" rewards. Note, we initialise counts to 1 to
+        # remove need for increment when sampling from their beta distributions.
+        self.counts = jnp.ones((2, self.config.k,))
+        self.estimates = self.config.initial_q_estimates.copy()
+
+    def pick(self) -> int:
+        theta = random.beta(self.prng_key(), self.counts[self.POSITIVE], self.counts[self.NEGATIVE])
+        return argmax_random(self.prng_key(), theta)
+
+    def update(self, action: int, reward: float):
+        if action < 0 or action >= self.config.k:
+            raise IndexError("Unsupported action")
+        kind = self.POSITIVE if reward > self.config.thompson_reward_threshold else self.NEGATIVE
+        self.counts = self.counts.at[kind, action].add(1)
+        self.estimates = self.estimates.at[action].add((reward - self.estimates[action]) / self.counts[:, action].sum())
+
+
+class MultiArmedBanditThompsonDynamic(MultiArmedBanditThompson):
+    """Multi-armed Bandit for discrete Action space with Thompson sampling with dynamic reward binarisation using
+    current estimates"""
+    estimates: t.FloatArray
+
+    def update(self, action: int, reward: float):
+        if action < 0 or action >= self.config.k:
+            raise IndexError("Unsupported action")
+        kind = self.POSITIVE if reward > self.estimates[action] else self.NEGATIVE
+        self.counts = self.counts.at[kind, action].add(1)
+        self.estimates = self.estimates.at[action].add((reward - self.estimates[action]) / self.counts[:, action].sum())
