@@ -131,7 +131,11 @@ class MultiArmedBanditBase(PRNGMixin, MultiArmedBanditProtocol, metaclass=ABCMet
 
 
 class MultiArmedBandit(MultiArmedBanditBase):
-    """Multi-armed Bandit for discrete Action space"""
+    """Multi-armed Bandit for discrete Action space
+
+    Reference:
+    - Sect. 2.2, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    """
     counts: t.IntArray
     estimates: t.FloatArray
     rewards: t.List[t.List[float]]
@@ -185,7 +189,12 @@ class MultiArmedBanditEpsilonGreedy(MultiArmedBandit):
 
 
 class IncrementalMultiArmedBandit(MultiArmedBanditBase):
-    """Incremental Sample-average Multi-armed Bandit for discrete Action space"""
+    """Incremental Sample-average Multi-armed Bandit for discrete Action space
+
+    References:
+    - Sect. 2.4, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    - Sect. 2.5, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    """
     counts: t.IntArray
     estimates: t.FloatArray
     never_chosen: t.Set[int]
@@ -219,7 +228,11 @@ class IncrementalMultiArmedBanditEpsilonGreedy(IncrementalMultiArmedBandit):
 
 
 class IncrementalMultiArmedBanditUCB(MultiArmedBanditBase):
-    """Incremental Sample-average Multi-armed Bandit for discrete Action space with Upper-Confidence Bound sampling"""
+    """Incremental Sample-average Multi-armed Bandit for discrete Action space with Upper-Confidence Bound sampling
+
+    Reference:
+    - Sect. 2.7, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    """
     steps: int
     counts: t.IntArray
     estimates: t.FloatArray
@@ -301,3 +314,45 @@ class MultiArmedBanditThompsonDynamic(MultiArmedBanditThompson):
         kind = self.POSITIVE if reward > self.estimates[action] else self.NEGATIVE
         self.counts = self.counts.at[kind, action].add(1)
         self.estimates = self.estimates.at[action].add((reward - self.estimates[action]) / self.counts[:, action].sum())
+
+
+class GradientMultiArmedBandit(MultiArmedBanditBase):
+    """Gradient-based Multi-armed Bandit for discrete Action space
+
+    Reference:
+    - Sect. 2.8, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    """
+    steps: int
+    preferences: t.FloatArray
+    _latest_probs: t.FloatArray
+    _average_reward: float
+
+    def set_state(self, preferences: t.FloatArray):
+        assert len(preferences) == self.config.k
+        self.preferences = preferences.copy()
+        self._latest_probs = softmax(self.preferences)
+        self.steps = 0
+        self._average_reward = 0
+
+    def reset_state(self):
+        self.preferences = jnp.zeros((self.config.k,), dtype=jnp.float32)
+        self._latest_probs = jnp.ones((self.config.k,), dtype=jnp.float32) / self.config.k
+        self.steps = 0
+        self._average_reward = 0
+
+    def pick(self) -> int:
+        logits = logsoftmax(self.preferences)
+        self._latest_probs = softmax(logits)
+        return random.categorical(self.prng_key(), logits=logits).item()
+
+    def update(self, action: int, reward: float):
+        self.steps += 1
+        # Compute new average reward `\bar{R}_t`
+        r_delta_tm1 = reward - self._average_reward
+        self._average_reward += r_delta_tm1 / self.steps
+        # Compute reward "error" at t
+        r_delta_t = reward - self._average_reward
+
+        p_delta = -1 * r_delta_t * self._latest_probs  # Descend on actions not chosen
+        p_delta = p_delta.at[action].set(r_delta_t * (1 - self._latest_probs[action]))  # Ascend on chosen action
+        self.preferences += p_delta
