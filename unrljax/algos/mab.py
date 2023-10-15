@@ -10,16 +10,24 @@ from jax import random
 
 import unrljax.types as t
 from unrljax.basic import argmax_random, logsoftmax, softmax
+from unrljax.mops import transpose_last2
 from unrljax.random import PRNGMixin
 
 
-class MultiArmedBanditProtocol(t.Protocol):
-
-    def pick(self, *args, **kwargs) -> int:
-        ...
-
-    def update(self, action: int, reward: float) -> None:
-        ...
+__all__ = [
+    "MultiArmedBanditConfig",
+    "MultiArmedBanditProtocol",
+    # Implementations
+    "GradientMultiArmedBandit",
+    "IncrementalMultiArmedBandit",
+    "IncrementalMultiArmedBanditEpsilonGreedy",
+    "IncrementalMultiArmedBanditUCB",
+    "LinUCB",
+    "MultiArmedBandit",
+    "MultiArmedBanditEpsilonGreedy",
+    "MultiArmedBanditThompson",
+    "MultiArmedBanditThompsonDynamic",
+]
 
 
 def epsilon_greedy(cls: t.Type[MultiArmedBanditProtocol]) -> t.Type:
@@ -148,7 +156,8 @@ class MultiArmedBandit(MultiArmedBanditBase):
     """Multi-armed Bandit for discrete Action space
 
     Reference:
-    - Sect. 2.2, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    [1] Sutton, R. S., & Barto, A. G. (2018). Section 2.2., Reinforcement learning: An introduction (2nd ed.). The MIT
+        Press.
     """
     counts: t.IntArray
     estimates: t.FloatArray
@@ -206,8 +215,8 @@ class IncrementalMultiArmedBandit(MultiArmedBanditBase):
     """Incremental Sample-average Multi-armed Bandit for discrete Action space
 
     References:
-    - Sect. 2.4, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
-    - Sect. 2.5, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    [1] Sutton, R. S., & Barto, A. G. (2018). Section 2.4-5., Reinforcement learning: An introduction (2nd ed.). The MIT
+        Press.
     """
     counts: t.IntArray
     estimates: t.FloatArray
@@ -245,7 +254,8 @@ class IncrementalMultiArmedBanditUCB(MultiArmedBanditBase):
     """Incremental Sample-average Multi-armed Bandit for discrete Action space with Upper-Confidence Bound sampling
 
     Reference:
-    - Sect. 2.7, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    [1] Sutton, R. S., & Barto, A. G. (2018). Section 2.7., Reinforcement learning: An introduction (2nd ed.). The MIT
+        Press.
     """
     steps: int
     counts: t.IntArray
@@ -334,7 +344,8 @@ class GradientMultiArmedBandit(MultiArmedBanditBase):
     """Gradient-based Multi-armed Bandit for discrete Action space
 
     Reference:
-    - Sect. 2.8, Sutton, R. S., & Barto, A. G. (2018). Reinforcement learning: An introduction (2nd ed.). The MIT Press.
+    [1] Sutton, R. S., & Barto, A. G. (2018). Section 2.8., Reinforcement learning: An introduction (2nd ed.). The MIT
+        Press.
     """
     steps: int
     preferences: t.FloatArray
@@ -370,3 +381,62 @@ class GradientMultiArmedBandit(MultiArmedBanditBase):
         p_delta = -1 * r_delta_t * self._latest_probs  # Descend on actions not chosen
         p_delta = p_delta.at[action].set(r_delta_t * (1 - self._latest_probs[action]))  # Ascend on chosen action
         self.preferences += p_delta
+
+
+class LinUCB(PRNGMixin, MultiArmedBanditProtocol):
+    """Contextual Upper-Confidence Bound Multi-Armed Bandit with linear payfoff using disjoint linear models.
+
+    Reference:
+    [1] Li, L., Chu, W., Langford, J., & Schapire, R. E. (2010). A contextual-bandit approach to personalized news
+        article recommendation. In Proceedings of the 19th international conference on World wide web.
+    """
+    config: MultiArmedBanditConfig
+    weights: t.FloatArray  # (k x d x d)
+    biases: t.FloatArray  # (k x d x 1)
+
+    _latent_dim: int
+    
+    prng_collection = 'LinUCB'
+
+    def __init__(self, config: MultiArmedBanditConfig, latent_dim: int):
+        super().__init__(self.prng_collection)
+        self.config = config
+        self._latent_dim = latent_dim
+        self.reset_state()
+
+    def reset_state(self):
+        self.weights = jnp.zeros((self.config.k, self._latent_dim, self._latent_dim), dtype=jnp.float32) + jnp.identity(
+            self._latent_dim, dtype=jnp.float32)
+        self.biases = jnp.zeros((self.config.k, self._latent_dim, 1), dtype=jnp.float32)
+
+    @property
+    def estimates(self) -> t.FloatArray:
+        unit_features = jnp.ones((self.config.k, self._latent_dim, 1))
+        return self._compute_contextual_estimates(self.weights, self.biases, unit_features)
+
+    @staticmethod
+    def _compute_contextual_estimates(weights: t.Array, biases: t.Array, features: t.Array, invert_weights: bool = True):
+        if invert_weights:
+            weights = jnp.linalg.inv(weights)
+        theta = jnp.einsum('kdd,kd1->kd1', weights, biases)
+        return jnp.einsum('k1d,kd1->k', transpose_last2(theta), features)
+
+    def check_and_prepare_features(self, features: t.Array):
+        assert features.shape[-2:] == (self.config.k, self._latent_dim), \
+            f"Features dimension mismatch: expecting (..., {self.config.k}, {self._latent_dim}), not {features.shape}."
+        return jnp.expand_dims(features, -1)
+
+    def pick(self, features: t.Array) -> int:
+        features = self.check_and_prepare_features(features)
+        # Generalises single-action form of Algorithm 1 ref.[1].
+        inv_weights = jnp.linalg.inv(self.weights)
+        p1 = self._compute_contextual_estimates(inv_weights, self.biases, features, invert_weights=False)
+        p2 = jnp.einsum('k1d,kdd,kd1->k', transpose_last2(features), inv_weights, features)
+        p = p1 + self.config.ucb_exploration * jnp.sqrt(p2)
+        return argmax_random(self.prng_key(), p)
+
+    def update(self, action: int, reward: int, *, features: t.Array):
+        features = self.check_and_prepare_features(features)
+        x = features[action, :]
+        self.weights = self.weights.at[action].add(x @ transpose_last2(x))
+        self.biases = self.biases.at[action].add(reward * x)

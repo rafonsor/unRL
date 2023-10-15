@@ -5,9 +5,7 @@ import seaborn as sb
 from jax import numpy as jnp
 from jax import random
 
-from unrljax.algos.mab import MultiArmedBanditConfig, IncrementalMultiArmedBanditEpsilonGreedy, \
-    IncrementalMultiArmedBanditUCB, MultiArmedBandit, MultiArmedBanditThompson, MultiArmedBanditThompsonDynamic, \
-    GradientMultiArmedBandit
+from unrljax.algos.mab import *
 from unrljax.basic import sample_gaussian
 from unrljax.random import get_prng_key
 from unrljax.types import FloatArray
@@ -16,7 +14,13 @@ from unrljax.types import FloatArray
 class GaussianBandits:
     prng_collection: str = 'GaussianBandits'
 
-    def __init__(self, k: int, epsilon: float = None, confidence_bound: float = None, thompson_sampling: bool = False, mus: FloatArray = None, sigmas: FloatArray = None):
+    def __init__(self,
+                 k: int,
+                 epsilon: float = None,
+                 confidence_bound: float = None,
+                 thompson_sampling: bool = False,
+                 mus: FloatArray = None,
+                 sigmas: FloatArray = None):
         self.mus = jnp.zeros((k,), dtype=jnp.float32) if mus is None else mus
         self.sigmas = jnp.ones((k,), dtype=jnp.float32) if sigmas is None else sigmas
 
@@ -95,7 +99,7 @@ class GaussianBanditsComparator:
                 self.history[name].append(action)
                 self.reward_history[name].append(reward)
 
-            if s % 500 == 499:
+            if s % 1000 == 999:
                 print(f"Step {s + 1} completed")
 
         print("Learning complete")
@@ -131,9 +135,57 @@ class GaussianBanditsComparator:
         plt.show()
 
 
+class ContextualGaussianBandits:
+    prng_collection: str = 'ContextualGaussianBandits'
+
+    def __init__(self,
+                 k: int,
+                 confidence_bound: float = None,
+                 linucb_latent_dim: int = None,
+                 mus: FloatArray = None,
+                 sigmas: FloatArray = None):
+        self.mus = jnp.zeros((k,), dtype=jnp.float32) if mus is None else mus
+        self.sigmas = jnp.ones((k,), dtype=jnp.float32) if sigmas is None else sigmas
+
+        print("Best action and value:", self.mus.argmax(), self.mus.max().round(3))
+        print("Optimal action-values:", jnp.round(self.mus, 3))
+
+        self.features_dim = [k]
+        self.history = []
+        self.reward_history = []
+
+        config = MultiArmedBanditConfig(k=k, ucb_exploration=confidence_bound)
+        if confidence_bound is not None:
+            if linucb_latent_dim is not None:
+                self.mab = LinUCB(config, linucb_latent_dim)
+                self.features_dim.insert(-1, linucb_latent_dim)
+        if not hasattr(self, 'mab'):
+            raise RuntimeError('No supported Contextual MAB')
+
+    def run(self, steps: int):
+        for s in range(steps):
+            features = 1 + random.normal(get_prng_key(self.prng_collection), (self.mab.config.k, self.mab._latent_dim))
+            action = self.mab.pick(features)
+            reward = sample_gaussian(get_prng_key(self.prng_collection), self.mus[action], self.sigmas[action]).item()
+            self.mab.update(action, reward, features=features)
+
+            self.history.append(action)
+            self.reward_history.append(reward)
+
+            if s % 1000 == 999:
+                print(f"Step {s + 1} completed")
+
+        print("Learning complete")
+        print(jnp.round(self.mab.estimates, 3))
+        print(jnp.argmax(self.mab.estimates), jnp.max(self.mab.estimates))
+
+    plot_distribution = GaussianBandits.plot_distribution
+
+
 if __name__ == '__main__':
     k = 10
-    testbed = GaussianBanditsComparator(k, epsilon=0.05, confidence_bound=1.25, mus=random.normal(get_prng_key(), (k,), dtype=jnp.float32))
+    # testbed = GaussianBanditsComparator(k, epsilon=0.05, confidence_bound=1.25, mus=random.normal(get_prng_key(), (k,), dtype=jnp.float32))
+    testbed = ContextualGaussianBandits(k, confidence_bound=1.25, linucb_latent_dim=20, mus=random.normal(get_prng_key(), (k,), dtype=jnp.float32))
     testbed.run(5000)
     testbed.plot_distribution()
 
