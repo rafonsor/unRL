@@ -105,6 +105,20 @@ class MultiArmedBanditConfig:
             assert self.ucb_exploration >= 0, "Upper-Confidence Bound exploration rate must be non-negative"
 
 
+class MultiArmedBanditProtocol(t.Protocol):
+    
+    __init__: t.Callable[(MultiArmedBanditConfig, ...), MultiArmedBanditProtocol]
+    """Signature: `__init__(config: MultiArmedBanditConfig, *args, **kwargs)"""
+    
+    pick: t.Callable[..., int]
+    """Signature: `pick(self, *args, **kwargs) -> int`
+    Pick and return one action"""
+
+    update: t.Callable[(int, float, ...), None]
+    """Signature: `update(self, action: int, reward: float, *args, **kwargs) -> None`
+    Update the bandit corresponding to the chosen action using the observed reward"""
+
+
 class MultiArmedBanditBase(PRNGMixin, MultiArmedBanditProtocol, metaclass=ABCMeta):
     config: MultiArmedBanditConfig
 
