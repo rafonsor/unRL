@@ -23,6 +23,7 @@ __all__ = [
     "IncrementalMultiArmedBanditEpsilonGreedy",
     "IncrementalMultiArmedBanditUCB",
     "LinUCB",
+    "LinUCBHybrid",
     "MultiArmedBandit",
     "MultiArmedBanditEpsilonGreedy",
     "MultiArmedBanditThompson",
@@ -405,8 +406,8 @@ class LinUCB(PRNGMixin, MultiArmedBanditProtocol):
         self.reset_state()
 
     def reset_state(self):
-        self.weights = jnp.zeros((self.config.k, self._latent_dim, self._latent_dim), dtype=jnp.float32) + jnp.identity(
-            self._latent_dim, dtype=jnp.float32)
+        self.weights = jnp.zeros((self.config.k, self._latent_dim, self._latent_dim), dtype=jnp.float32)
+        self.weights += jnp.identity(self._latent_dim, dtype=jnp.float32)
         self.biases = jnp.zeros((self.config.k, self._latent_dim, 1), dtype=jnp.float32)
 
     @property
@@ -415,7 +416,7 @@ class LinUCB(PRNGMixin, MultiArmedBanditProtocol):
         return self._compute_contextual_estimates(self.weights, self.biases, unit_features)
 
     @staticmethod
-    def _compute_contextual_estimates(weights: t.Array, biases: t.Array, features: t.Array, invert_weights: bool = True):
+    def _compute_contextual_estimates(weights: t.Array, biases: t.Array, features: t.Array, invert_weights: bool = True) -> t.Array:
         if invert_weights:
             weights = jnp.linalg.inv(weights)
         theta = jnp.einsum('kdd,kd1->kd1', weights, biases)
@@ -440,3 +441,96 @@ class LinUCB(PRNGMixin, MultiArmedBanditProtocol):
         x = features[action, :]
         self.weights = self.weights.at[action].add(x @ transpose_last2(x))
         self.biases = self.biases.at[action].add(reward * x)
+
+
+class LinUCBHybrid(PRNGMixin, MultiArmedBanditProtocol):
+    """Contextual Upper-Confidence Bound Multi-Armed Bandit with linear payfoff using hybrid linear models.
+
+    Reference:
+    [1] Li, L., Chu, W., Langford, J., & Schapire, R. E. (2010). A contextual-bandit approach to personalized news
+        article recommendation. In Proceedings of the 19th international conference on World wide web.
+    """
+    config: MultiArmedBanditConfig
+    A0: t.FloatArray  # (k x k)
+    b0: t.FloatArray  # (k x 1)
+    A: t.FloatArray  # (k x d x d)
+    B: t.FloatArray  # (k x d x k)
+    biases: t.FloatArray  # (k x d x 1)
+
+    _latent_dim: int
+
+    prng_collection = 'LinUCBHybrid'
+
+    def __init__(self, config: MultiArmedBanditConfig, latent_dim: int):
+        super().__init__(self.prng_collection)
+        self.config = config
+        self._latent_dim = latent_dim
+        self.reset_state()
+
+    def reset_state(self):
+        self.A0 = jnp.identity(self.config.k, dtype=jnp.float32)
+        self.b0 = jnp.zeros((self.config.k, 1), dtype=jnp.float32)
+        self.A = jnp.zeros((self.config.k, self._latent_dim, self._latent_dim), dtype=jnp.float32) + jnp.identity(
+            self._latent_dim, dtype=jnp.float32)
+        self.B = jnp.zeros((self.config.k, self._latent_dim, self.config.k), dtype=jnp.float32)
+        self.biases = jnp.zeros((self.config.k, self._latent_dim, 1), dtype=jnp.float32)
+
+    @property
+    def estimates(self) -> t.FloatArray:
+        unit_features = jnp.ones((self.config.k, self.config.k + self._latent_dim, 1))
+        zt = transpose_last2(unit_features[:, :self.config.k, :])
+        xt = transpose_last2(unit_features[:, self.config.k:, :])
+        _, _, beta, theta = self._invert_and_compute_beta_theta()
+        return zt @ beta + jnp.einsum('k1d,kd1->k', xt, theta)
+
+    def check_and_prepare_features(self, features: t.Array) -> t.Tuple[t.Array, t.Array]:
+        expected_dims = (self.config.k, self.config.k + self._latent_dim)
+        assert features.shape[-2:] == expected_dims, \
+            f"Features dimension mismatch: expecting (..., {expected_dims}), not {features.shape}."
+        features = jnp.expand_dims(features, -1)
+        return features[:, :self.config.k, :], features[:, self.config.k:, :]
+
+    def _invert_and_compute_beta_theta(self) -> t.Tuple[t.FloatArray, t.FloatArray, t.FloatArray, t.FloatArray]:
+        A0_inv = jnp.linalg.inv(self.A0)  # kk
+        A_inv = jnp.linalg.inv(self.A)  # kdd
+        beta = A0_inv @ self.b0  # k1
+        theta = jnp.einsum('kdd,kd1->kd1', A_inv, self.biases - self.B @ beta)  # kdd . (kd1 - (kdk . k1)) = kd1
+        return A0_inv, A_inv, beta, theta
+
+    def pick(self, features: t.Array) -> int:
+        (z, x) = self.check_and_prepare_features(features)  # kk1, kd1
+
+        zt, xt = transpose_last2(z), transpose_last2(x)  # k1k, k1d
+        A0_inv, A_inv, beta, theta = self._invert_and_compute_beta_theta()
+
+        t1 = xt @ A_inv  # k1d . kdd = k1d
+        t2 = A0_inv @ transpose_last2(self.B) @ A_inv @ x  # kk . kkd . kdd . kd1 = kk1
+
+        s1 = jnp.einsum('k1k,kk,kk1->k', zt, A0_inv, z)
+        s2 = jnp.einsum('k1k,kk1->k', 2*zt, t2)
+        s3 = jnp.einsum('k1d,kd1->k', t1, x)
+        s4 = jnp.einsum('k1d,kdk,kk1->k', t1, self.B, t2)
+        s = s1 - s2 + s3 + s4  # k
+
+        p1 = jnp.einsum('k1k,k1->k', zt, beta)
+        p2 = jnp.einsum('k1d,kd1->k', xt, theta)
+        p3 = self.config.ucb_exploration * jnp.sqrt(s)
+        p = p1 + p2 + p3  # k
+
+        return argmax_random(self.prng_key(), p)
+
+    def update(self, action: int, reward: int, *, features: t.Array):
+        (z, x) = self.check_and_prepare_features(features)  # kk1, kd1
+
+        za, xa = z[action], x[action]
+        BA_inv = self.B[action].T @ jnp.linalg.inv(self.A[action])
+
+        self.A0 += BA_inv @ self.B[action] + za @ za.T
+        self.b0 += BA_inv @ self.biases[action] + reward * za
+        self.A = self.A.at[action].add(xa @ xa.T)
+        self.B = self.B.at[action].add(xa @ za.T)
+        self.biases = self.biases.at[action].add(reward * xa)
+
+        BA_inv_new = self.B[action].T @ jnp.linalg.inv(self.A[action])
+        self.A0 -= BA_inv_new @ self.B[action]
+        self.b0 -= BA_inv_new @ self.biases[action]

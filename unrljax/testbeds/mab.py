@@ -142,6 +142,7 @@ class ContextualGaussianBandits:
                  k: int,
                  confidence_bound: float = None,
                  linucb_latent_dim: int = None,
+                 linucb_hybrid: bool = False,
                  mus: FloatArray = None,
                  sigmas: FloatArray = None):
         self.mus = jnp.zeros((k,), dtype=jnp.float32) if mus is None else mus
@@ -157,14 +158,19 @@ class ContextualGaussianBandits:
         config = MultiArmedBanditConfig(k=k, ucb_exploration=confidence_bound)
         if confidence_bound is not None:
             if linucb_latent_dim is not None:
-                self.mab = LinUCB(config, linucb_latent_dim)
-                self.features_dim.insert(-1, linucb_latent_dim)
+                if linucb_hybrid:
+                    self.mab = LinUCBHybrid(config, linucb_latent_dim)
+                    self.features_dim.append(k + linucb_latent_dim)
+                else:
+                    self.mab = LinUCB(config, linucb_latent_dim)
+                    self.features_dim.append(linucb_latent_dim)
+
         if not hasattr(self, 'mab'):
             raise RuntimeError('No supported Contextual MAB')
 
     def run(self, steps: int):
         for s in range(steps):
-            features = 1 + random.normal(get_prng_key(self.prng_collection), (self.mab.config.k, self.mab._latent_dim))
+            features = 1 + random.normal(get_prng_key(self.prng_collection), self.features_dim)
             action = self.mab.pick(features)
             reward = sample_gaussian(get_prng_key(self.prng_collection), self.mus[action], self.sigmas[action]).item()
             self.mab.update(action, reward, features=features)
@@ -184,8 +190,14 @@ class ContextualGaussianBandits:
 
 if __name__ == '__main__':
     k = 10
-    # testbed = GaussianBanditsComparator(k, epsilon=0.05, confidence_bound=1.25, mus=random.normal(get_prng_key(), (k,), dtype=jnp.float32))
-    testbed = ContextualGaussianBandits(k, confidence_bound=1.25, linucb_latent_dim=20, mus=random.normal(get_prng_key(), (k,), dtype=jnp.float32))
+    params = {
+        "confidence_bound": 1.25,
+        "linucb_latent_dim": 20,
+        "linucb_hybrid": True,
+        "mus": random.normal(get_prng_key(), (k,), dtype=jnp.float32)
+    }
+    # testbed = GaussianBanditsComparator(k, **params)
+    testbed = ContextualGaussianBandits(k, **params)
     testbed.run(5000)
     testbed.plot_distribution()
 
