@@ -63,6 +63,9 @@ class OnPolicyFirstVisitMonteCarloControl:
         self.returns = jnp.zeros((len(stateset), len(actionset)))
         self.counts = jnp.zeros((len(stateset), len(actionset)))
 
+    def action(self, state: int) -> int:
+        return argmax_random(get_prng_key(), self.policy[state])
+
     def optimise(self, episode: Trajectory):
         G = 0
 
