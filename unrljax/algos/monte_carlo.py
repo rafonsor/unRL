@@ -45,16 +45,40 @@ class SARS(SAR):
         yield self.successor
 
 
-ActionSet = t.FrozenSet[Action]
-StateSet = t.FrozenSet[State]
 Trajectory = t.Sequence[t.Tuple[State, Action, Reward] | SAR | SARS]
+
+T = t.TypeVar('T')
+
+
+class MappedFrozenSet(frozenset, t.Generic[T]):
+    def __new__(cls, iterable: t.Optional[t.Iterable[T]] = ()):
+        return frozenset.__new__(cls, iterable)
+
+    def __init__(self, iterable: t.Optional[t.Iterable[T]] = ()):
+        super().__init__()
+        self.__id_map = {s.id: s for s in self}
+        self.__name_map = {s.name: s for s in self}
+        self.__repr_map = {s.representation: s for s in self}
+
+    def by_representation(self, representation: t.Any) -> T:
+        return self.__repr_map[representation]
+
+    def by_name(self, name: str) -> T:
+        return self.__name_map[name]
+
+    def by_id(self, id_: int) -> T:
+        return self.__id_map[id_]
+
+
+DiscreteStateSet = MappedFrozenSet[State]
+DiscreteActionSet = MappedFrozenSet[Action]
 
 
 class OnPolicyFirstVisitMonteCarloControl:
 
     action_values: t.FloatArray
 
-    def __init__(self, discount: float, epsilon: float, stateset: StateSet, actionset: ActionSet):
+    def __init__(self, discount: float, epsilon: float, stateset: DiscreteStateSet, actionset: DiscreteActionSet):
         self.discount = discount
         self.epsilon = epsilon
         self.marginal = epsilon / len(actionset)
@@ -102,8 +126,8 @@ class OnPolicyFirstVisitMonteCarloControl:
 
 
 if __name__ == '__main__':
-    stateset = frozenset([State(idx, '', False, None) for idx in range(10)] + [State(10, '', True, None)])
-    actionset = frozenset([Action(idx, '', None) for idx in range(4)])
+    stateset = DiscreteStateSet([State(idx, '', False, None) for idx in range(10)] + [State(10, '', True, None)])
+    actionset = DiscreteActionSet([Action(idx, '', None) for idx in range(4)])
     on = OnPolicyFirstVisitMonteCarloControl(discount=0.9, epsilon=0.05, stateset=stateset, actionset=actionset)
 
     episode = [

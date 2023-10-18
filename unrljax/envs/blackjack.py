@@ -4,32 +4,32 @@ from itertools import product
 import gymnasium as gym
 
 from unrljax import types as t
-from unrljax.algos.monte_carlo import Action, State, OnPolicyFirstVisitMonteCarloControl, SAR, StateSet, ActionSet, \
-    Trajectory
+from unrljax.algos.monte_carlo import Action, State, OnPolicyFirstVisitMonteCarloControl, SAR, DiscreteStateSet, \
+    DiscreteActionSet, Trajectory
 
 logger = logging.getLogger(__name__)
 
 
-def make_blackjack(human: bool = False) -> t.Tuple[gym.Env, StateSet, ActionSet]:
+def make_blackjack(human: bool = False) -> t.Tuple[gym.Env, DiscreteStateSet, DiscreteActionSet]:
     env = gym.make('Blackjack-v1', natural=False, render_mode="human" if human else None)
-    stateset = frozenset([
+    stateset = DiscreteStateSet([
         State(idx, str(state), False, state)
         for idx, state
         in enumerate(product(*(range(state.n) for state in env.observation_space)))
     ])
-    actionset = frozenset([Action(idx, '', None) for idx in range(env.action_space.n)])
+    actionset = DiscreteActionSet([Action(idx, '', None) for idx in range(env.action_space.n)])
     return env, stateset, actionset
 
 
-def run_episode(env: gym.Env, state_map: dict, action_map: dict) -> Trajectory:
+def run_episode(env: gym.Env, statespace: DiscreteStateSet, actionspace: DiscreteActionSet) -> Trajectory:
     episode = []
     i = 1
     terminated = truncated = False
 
     observation, _ = env.reset()
     while not (terminated or truncated):
-        state = state_map[observation]
-        action = action_map[on.action(state.id)]
+        state = statespace.by_representation(observation)
+        action = actionspace.by_id(on.action(state.id))
 
         logger.debug(f'Step {i}: Applying action {action.id} in state {state.id}')
         observation, reward, terminated, truncated, _ = env.step(action.id)
@@ -46,17 +46,15 @@ def run_episode(env: gym.Env, state_map: dict, action_map: dict) -> Trajectory:
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     env, stateset, actionset = make_blackjack(False)
-    state_map = {s.representation: s for s in stateset}
-    action_map = {a.id: a for a in actionset}
 
     on = OnPolicyFirstVisitMonteCarloControl(discount=0.9, epsilon=0.05, stateset=stateset, actionset=actionset)
     print(on.action_values)
     print(on.policy)
 
     episodes = []
-    for ep in range(2500):
+    for ep in range(25):
         logger.info(f'Starting episode {ep}')
-        episode = run_episode(env, state_map, action_map)
+        episode = run_episode(env, stateset, actionset)
         episodes.append(episode)
         on.optimise(episode)
 
