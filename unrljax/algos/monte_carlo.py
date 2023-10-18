@@ -1,94 +1,34 @@
-from dataclasses import dataclass
-
 from jax import numpy as jnp
 
 import unrljax.types as t
-from unrljax.basic import argmax_random
+from unrljax.basic import argmax_random, argmax_all
+from unrljax.objects import DiscreteStateSet, DiscreteActionSet, Trajectory
 from unrljax.random import random, get_prng_key
-
-Reward = float
-
-
-@dataclass(unsafe_hash=True)
-class Action:
-    id: int
-    name: str
-    representation: t.Any = None
-
-
-@dataclass(unsafe_hash=True)
-class State:
-    id: int
-    name: str
-    terminal: bool
-    representation: t.Any = None
-
-
-@dataclass
-class SAR:
-    state: State
-    action: Action
-    reward: Reward
-
-    def __iter__(self) -> t.List[State | Action | Reward]:
-        yield self.state
-        yield self.action
-        yield self.reward
-
-
-@dataclass
-class SARS(SAR):
-    successor: State
-
-    def __iter__(self) -> t.List[State | Action | Reward]:
-        yield from super().__iter__()
-        yield self.successor
-
-
-Trajectory = t.Sequence[t.Tuple[State, Action, Reward] | SAR | SARS]
-
-T = t.TypeVar('T')
-
-
-class MappedFrozenSet(frozenset, t.Generic[T]):
-    def __new__(cls, iterable: t.Optional[t.Iterable[T]] = ()):
-        return frozenset.__new__(cls, iterable)
-
-    def __init__(self, iterable: t.Optional[t.Iterable[T]] = ()):
-        super().__init__()
-        self.__id_map = {s.id: s for s in self}
-        self.__name_map = {s.name: s for s in self}
-        self.__repr_map = {s.representation: s for s in self}
-
-    def by_representation(self, representation: t.Any) -> T:
-        return self.__repr_map[representation]
-
-    def by_name(self, name: str) -> T:
-        return self.__name_map[name]
-
-    def by_id(self, id_: int) -> T:
-        return self.__id_map[id_]
-
-
-DiscreteStateSet = MappedFrozenSet[State]
-DiscreteActionSet = MappedFrozenSet[Action]
 
 
 class OnPolicyFirstVisitMonteCarloControl:
+    """On-policy Monte Carlo Control following first-visit updates for discrete State and Action spaces
 
+    Reference:
+    [1] Sutton, R. S., & Barto, A. G. (2018). Section 5.4., Reinforcement learning: An introduction (2nd ed.). The MIT
+        Press.
+    """
     action_values: t.FloatArray
 
     def __init__(self, discount: float, epsilon: float, stateset: DiscreteStateSet, actionset: DiscreteActionSet):
         self.discount = discount
         self.epsilon = epsilon
-        self.marginal = epsilon / len(actionset)
-        self.policy = jnp.ones((len(stateset), len(actionset))) / len(actionset)
-        self.action_values = random.normal(get_prng_key(), (len(stateset), len(actionset)))
-        self.returns = jnp.zeros((len(stateset), len(actionset)))
-        self.counts = jnp.zeros((len(stateset), len(actionset)))
+        self.num_actions = len(actionset)
+        self.marginal = epsilon / self.num_actions
+        self.policy = jnp.ones((len(stateset), self.num_actions)) / self.num_actions
+        self.action_values = random.normal(get_prng_key(), (len(stateset), self.num_actions))
+        self.returns = jnp.zeros((len(stateset), self.num_actions))
+        self.counts = jnp.zeros((len(stateset), self.num_actions))
 
     def action(self, state: int) -> int:
-        return argmax_random(get_prng_key(), self.policy[state])
+        if random.normal(get_prng_key()) > self.epsilon:
+            return argmax_random(get_prng_key(), self.policy[state])
+        return random.randint(get_prng_key(), (1,), 0, self.num_actions - 1).item()
 
     def optimise(self, episode: Trajectory):
         G = 0
@@ -125,12 +65,70 @@ class OnPolicyFirstVisitMonteCarloControl:
             self.optimise(ep)
 
 
-if __name__ == '__main__':
-    stateset = DiscreteStateSet([State(idx, '', False, None) for idx in range(10)] + [State(10, '', True, None)])
-    actionset = DiscreteActionSet([Action(idx, '', None) for idx in range(4)])
-    on = OnPolicyFirstVisitMonteCarloControl(discount=0.9, epsilon=0.05, stateset=stateset, actionset=actionset)
+class OffPolicyMonteCarloControl:
+    """Off-policy Monte Carlo Control for discrete State and Action spaces
 
-    episode = [
+    Reference:
+    [1] Sutton, R. S., & Barto, A. G. (2018). Section 5.7., Reinforcement learning: An introduction (2nd ed.). The MIT
+        Press.
+    """
+    action_values: t.FloatArray
+    target_policy: t.FloatArray
+    counts: t.IntArray
+
+    def __init__(self, discount: float, stateset: DiscreteStateSet, actionset: DiscreteActionSet):
+        self.discount = discount
+        self.num_actions = len(actionset)
+        self.action_values = random.normal(get_prng_key(), (len(stateset), self.num_actions))
+        policy = jnp.where(self.action_values == self.action_values.max(axis=1), 1, 0)
+        self.target_policy = policy / policy.sum(axis=1)[:, None]
+
+        self.counts = jnp.zeros((len(stateset), self.num_actions))
+
+    def get_policy(self, randomised: bool = False) -> t.FloatArray:
+        if randomised:
+            policy = random.uniform(get_prng_key(), self.target_policy.shape)
+            return policy / policy.sum(axis=1)
+        return self.target_policy.copy()
+
+    def action(self, state: int, policy: t.Optional[t.FloatArray] = None) -> int:
+        policy = policy or self.target_policy
+        return argmax_random(get_prng_key(), policy[state])
+
+    def optimise(self, episode: Trajectory, behaviour_policy: t.FloatArray):
+        assert behaviour_policy.shape == self.target_policy.shape
+        G = 0
+        W = 1
+
+        for offset, (state, action, reward) in enumerate(episode[::-1]):
+            self.counts = self.counts.at[state.id, action.id].add(W)
+
+            # Update Q-values
+            G = self.discount * G + reward
+            delta = W * (G - self.action_values[state.id, action.id]) / self.counts[state.id, action.id]
+            self.action_values = self.action_values.at[state.id, action.id].set(delta)
+
+            # Update policy
+            self.target_policy = self.target_policy.at[state.id].set(0)
+            astars = argmax_all(self.action_values[state.id])
+            if action.id not in astars:
+                self.target_policy = self.target_policy.at[state.id, random.choice(get_prng_key(), astars)].set(1)
+                break
+            self.target_policy = self.target_policy.at[state.id, action.id].set(1)
+            W /= behaviour_policy[state.id, action.id]
+
+    def batch_optimise(self, episodes: t.Sequence[Trajectory], behaviour_policy: t.FloatArray):
+        for ep in episodes:
+            self.optimise(ep, behaviour_policy)
+
+
+if __name__ == '__main__':
+    from unrljax.objects import State, Action, SAR
+    stateset_ = DiscreteStateSet([State(idx, '', False, None) for idx in range(10)] + [State(10, '', True, None)])
+    actionset_ = DiscreteActionSet([Action(idx, '', None) for idx in range(4)])
+    on = OnPolicyFirstVisitMonteCarloControl(discount=0.9, epsilon=0.05, stateset=stateset_, actionset=actionset_)
+
+    episode_ = [
         SAR(State(0, '', False, None), Action(0, '', None), -1),
         SAR(State(4, '', False, None), Action(2, '', None), -1),
         SAR(State(7, '', False, None), Action(2, '', None), -1),
@@ -139,6 +137,6 @@ if __name__ == '__main__':
     ]
     print(on.action_values)
     print(on.policy)
-    on.batch_optimise([episode] * 10)
+    on.batch_optimise([episode_] * 10)
     print(on.action_values)
     print(on.policy)

@@ -3,7 +3,7 @@ from itertools import product
 
 import gymnasium as gym
 
-from unrljax import types as t
+import unrljax.types as t
 from unrljax.algos.monte_carlo import Action, State, OnPolicyFirstVisitMonteCarloControl, SAR, DiscreteStateSet, \
     DiscreteActionSet, Trajectory
 
@@ -45,16 +45,16 @@ def run_episode(env: gym.Env, statespace: DiscreteStateSet, actionspace: Discret
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    env, stateset, actionset = make_blackjack(False)
+    env, stateset_, actionset_ = make_blackjack(False)
 
-    on = OnPolicyFirstVisitMonteCarloControl(discount=0.9, epsilon=0.05, stateset=stateset, actionset=actionset)
+    on = OnPolicyFirstVisitMonteCarloControl(discount=0.9, epsilon=0.05, stateset=stateset_, actionset=actionset_)
     print(on.action_values)
     print(on.policy)
 
     episodes = []
     for ep in range(25):
         logger.info(f'Starting episode {ep}')
-        episode = run_episode(env, stateset, actionset)
+        episode = run_episode(env, stateset_, actionset_)
         episodes.append(episode)
         on.optimise(episode)
 
@@ -70,7 +70,7 @@ if __name__ == '__main__':
         ax = fig.add_subplot(projection='3d')
         x, y, z = zip(*(
             (s.representation[0], s.representation[1], (on.action_values[s.id] * on.policy[s.id]).mean())
-            for s in stateset if s.representation[2] == third
+            for s in stateset_ if s.representation[2] == third
         ))
         ax.set_title(f'Learnt state-values - {"" if third else "No "}Usable Ace')
         ax.plot_trisurf(x, y, z)

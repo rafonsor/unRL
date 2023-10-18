@@ -1,6 +1,6 @@
 from jax import numpy as jnp
 
-from unrljax import types as t
+import unrljax.types as t
 
 
 TRANSPOSE_LAST2_CACHED = [
