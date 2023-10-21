@@ -1,3 +1,16 @@
+# Copyright 2023 The unRL Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """This Module provides Multi-Armed Bandits for Discrete Action Spaces in (non)stationary settings."""
 from __future__ import annotations
 
@@ -5,7 +18,7 @@ from abc import abstractmethod, ABCMeta
 from enum import Enum
 from functools import wraps
 
-from jax import numpy as jnp
+import jax.numpy as jnp
 from jax import random
 
 import unrljax.types as t
@@ -156,8 +169,8 @@ class MultiArmedBanditBase(PRNGMixin, MultiArmedBanditProtocol, metaclass=ABCMet
 class MultiArmedBandit(MultiArmedBanditBase):
     """Multi-armed Bandit for discrete Action space
 
-    Reference:
-    [1] Sutton, R. S., & Barto, A. G. (2018). Section 2.2., Reinforcement learning: An introduction (2nd ed.). The MIT
+    References:
+    [1] Sutton, R. S., & Barto, A. G. (2018). Section 2.2., "Reinforcement learning: An introduction (2nd ed.)". The MIT
         Press.
     """
     counts: t.IntArray
@@ -166,6 +179,13 @@ class MultiArmedBandit(MultiArmedBanditBase):
     never_chosen: t.Set[int]
 
     def set_state(self, counts: t.IntArray, estimates: t.FloatArray, rewards: t.List[t.List[float]]):
+        """Set the MAB model to a specific state
+
+        Args:
+            counts: Vector of visit counts for each bandit.
+            estimates: Vector of State-value estimates for each bandit.
+            rewards: List of rewards received from each bandit.
+        """
         assert len(counts) == self.config.k
         assert all(c >= 0 for c in counts)
         assert len(estimates) == self.config.k
