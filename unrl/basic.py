@@ -13,7 +13,8 @@
 # limitations under the License.
 import math
 import random
-import typing as t
+
+import unrl.types as t
 
 
 def argmax(seq: t.Sequence) -> int:
