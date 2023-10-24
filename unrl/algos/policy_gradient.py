@@ -49,21 +49,56 @@ class Reinforce:
 
             G = self._calculate_return(episode, offset, timestep)
             step_and_magnitude = self.learning_rate * self.discount_factor ** timestep * G
-            self._step(step_and_magnitude)
+            self._step(self.policy, step_and_magnitude)
 
     def batch_optimise(self, episodes: t.Sequence[FrozenTrajectory]):
         for episode in episodes:
             self.optimise(episode)
 
-    def _step(self, step_and_magnitude: t.FloatLike):
+    @staticmethod
+    def _step(model: pt.nn.Module, step_and_magnitude: t.FloatLike):
         """Step parameters in the direction of their gradients"""
-        for p in self.policy.parameters():
+        for p in model.parameters():
             if p.requires_grad:
                 assert p.grad, f"Attempting to perform gradient ascent on {p} with empty gradients"
                 p += step_and_magnitude * p.grad
-        self.policy.zero_grad()
+        model.zero_grad()
 
     def _calculate_return(self, episode: FrozenTrajectory, offset: int, timestep: int) -> float:
         discount = pt.cumprod(pt.ones((offset + 1,)) * self.discount_factor, 0)
         future_rewards = episode.rewards[timestep - 1:]  # note transition t points to `reward` from time t+1
         return (discount * future_rewards).sum()
+
+
+class BaselineReinforce(Reinforce):
+    """REINFORCE Monte-Carlo Policy-Gradient with Baseline that learns both a policy and state-values"""
+    policy: Policy
+    state_values: pt.nn.Module
+
+    def __init__(self,
+                 policy: Policy,
+                 state_values: pt.nn.Module,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 discount_factor: float):
+        super().__init__(policy, learning_rate_policy, discount_factor)
+        self.state_values = state_values
+        self.learning_rate_values = learning_rate_values
+
+    def optimise(self, episode: FrozenTrajectory):
+        for offset in range(len(episode)):
+            timestep = len(episode) - 1 - offset
+            (state, action, _) = episode[timestep]
+
+            # Compute and backpropagate gradients
+            logprobs = self.policy(state)
+            logprobs[action].backward()
+            estimate = self.state_values(state).sum()
+            estimate.backward()
+
+            # Compute deltas and update parameters
+            delta = self._calculate_return(episode, offset, timestep) - estimate
+            step_and_magnitude_values = self.learning_rate_values * delta
+            step_and_magnitude_policy = self.learning_rate * self.discount_factor ** timestep * delta
+            self._step(self.state_values, step_and_magnitude_values)
+            self._step(self.policy, step_and_magnitude_policy)
