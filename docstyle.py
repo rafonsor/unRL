@@ -44,7 +44,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sb
+import torch as pt
+import torch.nn.functional as F
 from jax import random
+from torch import nn
 
 # unRL imports
 import unrljax.types as t
