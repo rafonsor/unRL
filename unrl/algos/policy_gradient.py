@@ -18,6 +18,7 @@ import torch as pt
 
 import unrl.types as t
 from unrl.containers import FrozenTrajectory, Transition, Trajectory
+from unrl.utils import persisted_generator_value
 
 DEFAULT_EPSILON = 0.1
 
@@ -44,8 +45,8 @@ def _step_ascend(model: pt.nn.Module, step_and_magnitude: t.FloatLike):
     """Increment parameters in the direction of their gradients"""
     for p in model.parameters():
         if p.requires_grad:
-            assert p.grad, f"Attempting to perform gradient ascent on {p} with empty gradients"
-            p += step_and_magnitude * p.grad
+            assert p.grad is not None, f"Attempting to perform gradient ascent on {p} with empty gradients"
+            p.grad *= step_and_magnitude
     model.zero_grad()
 
 
@@ -137,6 +138,7 @@ class ActorCritic:
         self.learning_rate = learning_rate_policy
         self.learning_rate_values = learning_rate_values
 
+    @persisted_generator_value
     def online_optimise(self,
                         starting_state: pt.Tensor,
                         mode: ActionSamplingMode = ActionSamplingMode.GREEDY,
