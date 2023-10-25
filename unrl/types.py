@@ -17,3 +17,5 @@ import torch as pt
 
 IntLike: TypeAlias = int | pt.IntType | pt.IntTensor
 FloatLike: TypeAlias = float | pt.FloatType | pt.FloatTensor
+
+TensorList: TypeAlias = List[pt.Tensor]

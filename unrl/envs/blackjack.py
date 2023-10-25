@@ -17,9 +17,10 @@ from itertools import product
 import gymnasium as gym
 import torch as pt
 import torch.nn.functional as F
+from matplotlib import pyplot as plt
 
 import unrl.types as t
-from unrl.algos.policy_gradient import ActorCritic, Policy
+from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
 from unrl.containers import Trajectory
 
 logger = logging.getLogger(__name__)
@@ -90,17 +91,25 @@ class ExampleStateValueModel(pt.nn.Module):
         return estimate
 
 
-def prepare_game_model(env: gym.Env) -> ActorCritic:
+def prepare_game_model(env: gym.Env, eligibility_traces: bool = False) -> ActorCritic:
     discount_factor = 0.9
-    learning_rate_policy = 1e-4
-    learning_rate_values = 1e-4
+    learning_rate_policy = 1e-8
+    learning_rate_values = 1e-8
+    trace_decay_policy = 0.10
+    trace_decay_values = 0.10
     hidden_dim_policy = 100
     hidden_dim_values = 100
     num_state_dims = len(env.observation_space)  # noqa, observation_space is a tuple
     num_actions = env.action_space.n
     policy = ExamplePolicy(num_state_dims, num_actions, hidden_dim_policy)
     state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
-    actor_critic = ActorCritic(policy, state_value_model, learning_rate_policy, learning_rate_values, discount_factor)
+    if eligibility_traces:
+        actor_critic = EligibilityTraceActorCritic(
+            policy, state_value_model, discount_factor, learning_rate_policy, learning_rate_values, trace_decay_policy,
+            trace_decay_values)
+    else:
+        actor_critic = ActorCritic(
+            policy, state_value_model, learning_rate_policy, learning_rate_values, discount_factor)
     return actor_critic
 
 
@@ -109,11 +118,17 @@ if __name__ == '__main__':
     logger.setLevel(logging.DEBUG)
 
     env = make_blackjack(human=True)
-    model = prepare_game_model(env)
+    model = prepare_game_model(env, eligibility_traces=True)
 
     num_episodes = 20
     logger.info(f'Playing Blackjack for {num_episodes} episodes')
 
+    episodes = []
     for _ in range(num_episodes):
         logger.debug("starting new episode")
-        run_episode(env)
+        episodes.append(run_episode(env))
+
+    plt.plot(pt.cumsum(pt.Tensor([ep[-1].reward for ep in episodes]), 0))
+    plt.ylabel('Accumulated reward')
+    plt.xlabel('Episode #')
+    plt.show()

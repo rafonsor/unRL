@@ -70,10 +70,10 @@ class FrozenTrajectory:
             next_states.append(transition.next_state)
 
         states = pt.concat(states)
-        actions = pt.concat(actions) if isinstance(trajectory[0].action, pt.Tensor) else pt.Tensor(actions)
-        rewards = pt.concat(rewards) if isinstance(trajectory[0].reward, pt.Tensor) else pt.Tensor(rewards)
-        if isinstance(trajectory[0].next_state, pt.Tensor):
-            if isinstance(trajectory[-1].next_state, pt.Tensor):
+        actions = pt.concat(actions) if pt.is_tensor(trajectory[0].action) else pt.Tensor(actions)
+        rewards = pt.concat(rewards) if pt.is_tensor(trajectory[0].reward) else pt.Tensor(rewards)
+        if pt.is_tensor(trajectory[0].next_state):
+            if pt.is_tensor(trajectory[-1].next_state):
                 next_states = pt.concat(next_states)
             else:
                 next_states = pt.concat(next_states[:-1])
@@ -87,11 +87,11 @@ class FrozenTrajectory:
         _, action, reward, next_state = trajectory[0]
         states, actions, rewards, next_states = zip(*trajectory)
         states = pt.concat(states)
-        actions = pt.concat(actions) if isinstance(action, pt.Tensor) else pt.Tensor(actions)
-        rewards = pt.concat(rewards) if isinstance(reward, pt.Tensor) else pt.Tensor(rewards)
+        actions = pt.concat(actions) if pt.is_tensor(action) else pt.Tensor(actions)
+        rewards = pt.concat(rewards) if pt.is_tensor(reward) else pt.Tensor(rewards)
         _, _, _, last_next_state = trajectory[-1]
-        if isinstance(next_state, pt.Tensor):
-            if isinstance(last_next_state, pt.Tensor):
+        if pt.is_tensor(next_state):
+            if pt.is_tensor(last_next_state):
                 next_states = pt.concat(next_states)
             else:
                 next_states = pt.concat(next_states[:-1])
@@ -149,8 +149,7 @@ class FrozenTrajectory:
         state = self.__states[i]
         action = self.__actions[i].item if len(self.__actions.shape) == 1 else self.__actions[i]
         reward = self.__rewards[i].item if len(self.__rewards.shape) == 1 else self.__rewards[i]
-        if self.__next_states is None or i >= self.__next_states.shape[
-            0]:  # The last transition may not have a next state
+        if self.__next_states is None or i >= self.__next_states.shape[0]:  # The last transition may lack a next state
             next_state = None
         else:
             next_state = self.__next_states[i]
