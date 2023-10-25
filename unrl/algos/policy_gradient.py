@@ -18,6 +18,7 @@ import torch as pt
 
 import unrl.types as t
 from unrl.containers import FrozenTrajectory, Transition, Trajectory
+from unrl.optim import optimiser_update
 from unrl.utils import persisted_generator_value
 
 DEFAULT_EPSILON = 0.1
@@ -39,15 +40,6 @@ class Policy(pt.nn.Module):
     def forward(self, state: pt.Tensor) -> pt.Tensor:
         """Returns logprobabilies of actions"""
         ...
-
-
-def _step_ascend(model: pt.nn.Module, step_and_magnitude: t.FloatLike):
-    """Increment parameters in the direction of their gradients"""
-    for p in model.parameters():
-        if p.requires_grad:
-            assert p.grad is not None, f"Attempting to perform gradient ascent on {p} with empty gradients"
-            p.grad *= step_and_magnitude
-    model.zero_grad()
 
 
 class Reinforce:
@@ -74,7 +66,7 @@ class Reinforce:
 
             G = self._calculate_return(episode, offset, timestep)
             step_and_magnitude = self.learning_rate * self.discount_factor ** timestep * G
-            _step_ascend(self.policy, step_and_magnitude)
+            optimiser_update(self.policy, step_and_magnitude)
 
     def batch_optimise(self, episodes: t.Sequence[FrozenTrajectory]):
         for episode in episodes:
@@ -117,8 +109,8 @@ class BaselineReinforce(Reinforce):
             delta = self._calculate_return(episode, offset, timestep) - estimate
             step_and_magnitude_values = self.learning_rate_values * delta
             step_and_magnitude_policy = self.learning_rate * self.discount_factor ** timestep * delta
-            _step_ascend(self.state_value_model, step_and_magnitude_values)
-            _step_ascend(self.policy, step_and_magnitude_policy)
+            optimiser_update(self.state_value_model, step_and_magnitude_values)
+            optimiser_update(self.policy, step_and_magnitude_policy)
 
 
 class ActorCritic:
@@ -199,8 +191,8 @@ class ActorCritic:
             # Compute deltas and update parameters
             step_and_magnitude_values = self.learning_rate_values * error
             step_and_magnitude_policy = self.learning_rate * I * error
-            _step_ascend(self.state_value_model, step_and_magnitude_values)
-            _step_ascend(self.policy, step_and_magnitude_policy)
+            optimiser_update(self.state_value_model, step_and_magnitude_values)
+            optimiser_update(self.policy, step_and_magnitude_policy)
 
             # Save transition
             episode.append(Transition(state, action.type(pt.int), reward, next_state))
