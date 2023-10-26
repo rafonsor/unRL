@@ -26,13 +26,19 @@ from unrl.containers import Trajectory
 logger = logging.getLogger(__name__)
 
 
-def make_blackjack(human: bool = False) -> gym.Env:
-    return gym.make('Blackjack-v1', natural=False, render_mode="human" if human else None)
+def make_blackjack(human: bool = False) -> t.Tuple[gym.Env, t.Callable[[t.Tuple[int]], pt.Tensor]]:
+    env = gym.make('Blackjack-v1', natural=False, render_mode="human" if human else None)
+    bounds = pt.Tensor([dim.n - 1 for dim in env.observation_space])
+
+    def transform(obs: t.Tuple[int]) -> pt.Tensor:
+        return pt.Tensor(obs) / bounds
+
+    return env, transform
 
 
-def run_episode(env: gym.Env) -> Trajectory:
+def run_episode(env: gym.Env, transform: t.Callable[[t.Tuple[int]], pt.Tensor]) -> Trajectory:
     observation, _ = env.reset()
-    state = pt.Tensor(observation)
+    state = transform(observation)
     terminated = truncated = False
     info = None
     i = 0
@@ -41,7 +47,7 @@ def run_episode(env: gym.Env) -> Trajectory:
     while (action := gen.send(info)) is not None and (i := i+1):
         logger.debug(f'Step {i}: Applying action {action.item()} in state {state}')
         observation, reward, terminated, truncated, _ = env.step(action.item())
-        state = pt.Tensor(observation)
+        state = transform(observation)
         info = (reward, state, terminated | truncated)
         if env.render_mode == 'human':
             from time import sleep
@@ -72,7 +78,7 @@ class ExamplePolicy(Policy):
         self.logsm = pt.nn.LogSoftmax(0)
 
     def forward(self, state: pt.Tensor) -> pt.Tensor:
-        x = F.sigmoid(self.layer1(state))
+        x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
         return self.logsm(self.layer3(x))
 
@@ -85,9 +91,9 @@ class ExampleStateValueModel(pt.nn.Module):
         self.layer3 = pt.nn.Linear(hidden_dim, 1)
 
     def forward(self, state: pt.Tensor) -> pt.Tensor:
-        x = F.relu(self.layer1(state))
-        x = F.relu(self.layer2(x))
-        estimate = self.layer3(x)
+        x = F.sigmoid(self.layer1(state))
+        x = F.sigmoid(self.layer2(x))
+        estimate = F.sigmoid(self.layer3(x))
         return estimate
 
 
@@ -117,16 +123,18 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     logger.setLevel(logging.DEBUG)
 
-    env = make_blackjack(human=True)
+    env, obs_to_state = make_blackjack(human=False)
     model = prepare_game_model(env, eligibility_traces=True)
 
-    num_episodes = 20
+    num_episodes = 10000
     logger.info(f'Playing Blackjack for {num_episodes} episodes')
 
     episodes = []
-    for _ in range(num_episodes):
+    for ep in range(num_episodes):
         logger.debug("starting new episode")
-        episodes.append(run_episode(env))
+        episodes.append(run_episode(env, obs_to_state))
+        if (ep+1) % 2500 == 0:
+            logger.info(f"Episode {ep+1} done")
 
     plt.plot(pt.cumsum(pt.Tensor([ep[-1].reward for ep in episodes]), 0))
     plt.ylabel('Accumulated reward')
