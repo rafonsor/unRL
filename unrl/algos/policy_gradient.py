@@ -218,14 +218,18 @@ class EligibilityTraceActorCritic:
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  trace_decay_policy: float,
-                 trace_decay_values: float):
+                 trace_decay_values: float,
+                 weight_decay_policy: float = 0.0,
+                 weight_decay_values: float = 0.0):
         self.policy = policy
         self.state_value_model = state_value_model
-        self._optim_policy = EligibilityTraceOptimizer(
-            policy.parameters(), discount_factor, learning_rate_policy, trace_decay_policy, discounted_gradient=True)
-        self._optim_values = EligibilityTraceOptimizer(
-            state_value_model.parameters(), discount_factor, learning_rate_values, trace_decay_values)
         self.discount_factor = discount_factor
+        self._optim_policy = EligibilityTraceOptimizer(
+            policy.parameters(), discount_factor, learning_rate_policy, trace_decay_policy,
+            weight_decay=weight_decay_policy, discounted_gradient=True)
+        self._optim_values = EligibilityTraceOptimizer(
+            state_value_model.parameters(), discount_factor, learning_rate_values, trace_decay_values,
+            weight_decay=weight_decay_values)
 
     @persisted_generator_value
     def online_optimise(self,

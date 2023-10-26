@@ -63,14 +63,23 @@ def optimiser_update_descent(model: pt.nn.Module, step_and_magnitude: t.FloatLik
 class EligibilityTraceOptimizer(pt.optim.Optimizer):
     """Policy Gradient Optimizer with eligibility traces"""
 
-    def __init__(self, params: params_t, discount_factor: float, learning_rate: float, trace_decay: float, *, discounted_gradient: bool = False):
+    def __init__(self,
+                 params: params_t,
+                 discount_factor: float,
+                 learning_rate: float,
+                 trace_decay: float,
+                 *,
+                 weight_decay: float = 0.0,
+                 discounted_gradient: bool = False):
         validate_config(discount_factor, "discount_factor", "unitpositive")
         validate_config(learning_rate, "learning_rate", "positive")
         validate_config(trace_decay, "trace_decay", "unit")
+        validate_config(weight_decay, "weight_decay", "unit")
         defaults = {
             "discount_factor": discount_factor,
             "learning_rate": learning_rate,
             "trace_decay": trace_decay,
+            "weight_decay": weight_decay,
             "discounted_gradient": discounted_gradient,
             "differentiable": False,
         }
@@ -140,6 +149,7 @@ class EligibilityTraceOptimizer(pt.optim.Optimizer):
                 lr=group['learning_rate'],
                 y=group['discount_factor'],
                 lam=group['trace_decay'],
+                weight_decay=group['weight_decay'],
                 discounted_gradient=group["discounted_gradient"]
             )
 
@@ -154,15 +164,20 @@ class EligibilityTraceOptimizer(pt.optim.Optimizer):
                                   lr: float,
                                   y: float,
                                   lam: float,
+                                  weight_decay: float,
                                   discounted_gradient: bool):
         for param, grad, trace, step in zip(params_with_grad, grads, eligibility_traces, state_steps):
             step += 1
             trace.mul_(y*lam)
             if discounted_gradient:
-                trace.add_(grad * (y ** step))
+                trace.add_(grad * (y ** (step - 1)))
             else:
                 trace.add_(grad)
-            param.add_(trace*td, alpha=lr)
+
+            d_p = trace*td
+            if weight_decay:
+                d_p -= weight_decay * param
+            param.add_(d_p, alpha=lr)
 
     def episode_reset(self):
         self.state.clear()  # defaultdict, will repopulate parameter keys on-the-fly
