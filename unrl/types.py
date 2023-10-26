@@ -13,6 +13,7 @@
 #  limitations under the License.
 from typing import *
 
+from numpy.typing import NDArray  # noqa
 import torch as pt
 
 IntLike: TypeAlias = int | pt.IntType | pt.IntTensor
