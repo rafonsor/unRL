@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
-from itertools import product
 
 import gymnasium as gym
 import torch as pt
 import torch.nn.functional as F
-from matplotlib import pyplot as plt
 
 import unrl.types as t
 from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
@@ -91,9 +89,9 @@ class ExampleStateValueModel(pt.nn.Module):
         self.layer3 = pt.nn.Linear(hidden_dim, 1)
 
     def forward(self, state: pt.Tensor) -> pt.Tensor:
-        x = F.sigmoid(self.layer1(state))
-        x = F.sigmoid(self.layer2(x))
-        estimate = F.sigmoid(self.layer3(x))
+        x = F.relu(self.layer1(state))
+        x = F.relu(self.layer2(x))
+        estimate = F.tanh(self.layer3(x))
         return estimate
 
 
@@ -120,6 +118,11 @@ def prepare_game_model(env: gym.Env, eligibility_traces: bool = False) -> ActorC
 
 
 if __name__ == '__main__':
+    import datetime as dt
+    from itertools import product
+
+    from matplotlib import pyplot as plt
+
     logging.basicConfig(level=logging.INFO)
     logger.setLevel(logging.DEBUG)
 
@@ -129,14 +132,44 @@ if __name__ == '__main__':
     num_episodes = 10000
     logger.info(f'Playing Blackjack for {num_episodes} episodes')
 
-    episodes = []
+    rewards = []
     for ep in range(num_episodes):
         logger.debug("starting new episode")
-        episodes.append(run_episode(env, obs_to_state))
-        if (ep+1) % 2500 == 0:
-            logger.info(f"Episode {ep+1} done")
+        rewards.append(run_episode(env, obs_to_state)[-1].reward)
+        if (ep+1) % 1000 == 0:
+            logger.info(f"[{dt.datetime.now().isoformat()}Episode {ep+1} done")
 
-    plt.plot(pt.cumsum(pt.Tensor([ep[-1].reward for ep in episodes]), 0))
+    # Plot accumulated rewards
+    plt.plot(pt.cumsum(pt.Tensor(rewards), 0))
     plt.ylabel('Accumulated reward')
     plt.xlabel('Episode #')
+    plt.ylim([-num_episodes, num_episodes])
+
+    def plot_learnt_state_values(estimates: pt.Tensor, ace: bool):
+        variant = f'{"" if ace else "No "}Usable Ace'
+        logger.info("Plotting Learnt State-values")
+        fig = plt.figure()
+        ax = fig.add_subplot(projection='3d')
+        ax.plot_trisurf(estimates[:, 0], estimates[:, 1], estimates[:, 2])
+        ax.set_title(f'Learnt state-values - {variant}')
+        ax.set_xlabel("Player's Current Sum")
+        ax.set_ylabel("Dealer's First Card")
+        ax.set_zlabel("Value Estimate")
+        ax.set_zlim([-1, 1])
+
+    # Retrieve state-value estimates for entire state space
+    stateset = pt.Tensor([
+        [current_sum_player, first_card_dealer, 0]
+        for current_sum_player, first_card_dealer
+        in product(range(env.observation_space[0].n), range(env.observation_space[1].n))
+    ])
+    estimates_ace = stateset.clone()
+    estimates_ace[:, 2:] = model.state_value_model(stateset).detach()
+    stateset[:, 2] = 1
+    estimates_no_ace = stateset.clone()
+    estimates_no_ace[:, 2:] = model.state_value_model(stateset).detach()
+
+    # Plot learnt state-values
+    plot_learnt_state_values(estimates_ace, True)
+    plot_learnt_state_values(estimates_no_ace, False)
     plt.show()
