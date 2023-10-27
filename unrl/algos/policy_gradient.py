@@ -17,23 +17,16 @@ from enum import Enum
 import torch as pt
 
 import unrl.types as t
+from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
 from unrl.containers import FrozenTrajectory, Transition, Trajectory
 from unrl.optim import optimiser_update, EligibilityTraceOptimizer
 from unrl.utils import persisted_generator_value
-
-DEFAULT_EPSILON = 0.1
 
 
 class GradientAccumulationMode(Enum):
     STEP = 'step'
     EPISODE = 'episode'
     BATCH = 'batch'
-
-
-class ActionSamplingMode(Enum):
-    GREEDY = 'greedy'  # Always select the best-value actions, breaking ties randomly with equal probability
-    EPSILON_GREEDY = 'epsilon'  # Select with probability `epsilon` one action uniformly at random, otherwise choose best-valued action
-    STOCHASTIC = 'stochastic'  # Sample action according to distribution
 
 
 class Policy(pt.nn.Module):
@@ -117,34 +110,40 @@ class ActorCritic:
     """One-Step Online Actor-Critic for episodic settings"""
     policy: Policy
     state_value_model: pt.nn.Module
+    sampler: ActionSampler  # Strategy for sampling actions from the policy
 
     def __init__(self,
                  policy: Policy,
                  state_value_model: pt.nn.Module,
                  learning_rate_policy: float,
                  learning_rate_values: float,
-                 discount_factor: float):
+                 discount_factor: float,
+                 action_sampler: t.Optional[ActionSampler] = None):
+        """Args:
+            policy: Policy model to improve
+            state_value_model: State-value model to improve
+            learning_rate_policy: learning rate for Policy model
+            learning_rate_values: learning rate for State-value mode
+            discount_factor: discounting rate for future rewards
+            action_sampler: (Optional) strategy for sampling actions from the policy. Defaults to Greedy sampling if not
+                            provided.
+        """
         self.policy = policy
         self.state_value_model = state_value_model
         self.discount_factor = discount_factor
         self.learning_rate = learning_rate_policy
         self.learning_rate_values = learning_rate_values
+        self.sampler = action_sampler or make_sampler(ActionSamplingMode.GREEDY)
 
     @persisted_generator_value
     def online_optimise(self,
                         starting_state: pt.Tensor,
-                        mode: ActionSamplingMode = ActionSamplingMode.GREEDY,
-                        **kwargs
                         ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool], Trajectory]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
             starting_state:
                 State from which to begin the episode.
-            mode:
-                strategy for sampling actions from the policy.
-            **kwargs:
-                Extra optional keyword arguments. For example, `epsilon` when using ActionSamplingMode.EPSILON_GREEDY.
 
         Yields:
             Action chosen by policy for the current state.
@@ -157,25 +156,13 @@ class ActorCritic:
             A trajectory representing the full episode.
 
         """
-        if mode == ActionSamplingMode.EPSILON_GREEDY:
-            epsilon = kwargs.get('epsilon')
-            if not epsilon:
-                warnings.warn(RuntimeWarning(
-                    f'EPSILON_GREEDY sampling chosen but no `epsilon` specific, using default value {DEFAULT_EPSILON}'))
-                epsilon = DEFAULT_EPSILON
-
         episode = []
         state = starting_state
         I = 1
         terminal = False
         while not terminal:
             logprobs = self.policy(state)
-            if mode == ActionSamplingMode.STOCHASTIC:
-                action = pt.distributions.Categorical(logits=logprobs).sample()
-            elif mode == ActionSamplingMode.EPSILON_GREEDY and pt.rand(1).item() <= epsilon:
-                action = pt.randint(0, logprobs.shape[0], (1,))
-            else:  # GREEDY and (1 - epsilon) case of EPSILON_GREEDY
-                action = pt.argmax(logprobs)
+            action = self.sampler.sample(logprobs)
 
             reward, next_state, terminal = yield action
 
@@ -207,6 +194,7 @@ class EligibilityTraceActorCritic:
     """One-Step Online Actor-Critic with eligibility traces for episodic settings"""
     policy: Policy
     state_value_model: pt.nn.Module
+    sampler: ActionSampler
 
     _optim_policy: EligibilityTraceOptimizer
     _optim_values: EligibilityTraceOptimizer
@@ -214,13 +202,28 @@ class EligibilityTraceActorCritic:
     def __init__(self,
                  policy: Policy,
                  state_value_model: pt.nn.Module,
+                 *,
                  discount_factor: float,
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  trace_decay_policy: float,
                  trace_decay_values: float,
                  weight_decay_policy: float = 0.0,
-                 weight_decay_values: float = 0.0):
+                 weight_decay_values: float = 0.0,
+                 action_sampler: t.Optional[ActionSampler] = None):
+        """Args:
+            policy: Policy model to improve
+            state_value_model: State-value model to improve
+            discount_factor: discounting rate for future rewards
+            learning_rate_policy: learning rate for Policy model
+            learning_rate_values: learning rate for State-value mode
+            trace_decay_policy: decay factor for eligibility traces of Policy model
+            trace_decay_values: decay factor for eligibility traces of State-value mode
+            weight_decay_policy: (Optional) weight decay rates for Policy model. Disabled if set to "0.0".
+            weight_decay_values: (Optional) weight decay rates for State-value mode. Disabled if set to "0.0".
+            action_sampler: (Optional) strategy for sampling actions from the policy. Defaults to Greedy sampling if not
+                            provided.
+        """
         self.policy = policy
         self.state_value_model = state_value_model
         self.discount_factor = discount_factor
@@ -230,22 +233,17 @@ class EligibilityTraceActorCritic:
         self._optim_values = EligibilityTraceOptimizer(
             state_value_model.parameters(), discount_factor, learning_rate_values, trace_decay_values,
             weight_decay=weight_decay_values)
+        self.sampler = action_sampler or make_sampler(ActionSamplingMode.GREEDY)
 
     @persisted_generator_value
     def online_optimise(self,
                         starting_state: pt.Tensor,
-                        mode: ActionSamplingMode = ActionSamplingMode.GREEDY,
-                        **kwargs
                         ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool], Trajectory]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
             starting_state:
                 State from which to begin the episode.
-            mode:
-                strategy for sampling actions from the policy.
-            **kwargs:
-                Extra optional keyword arguments. For example, `epsilon` when using ActionSamplingMode.EPSILON_GREEDY.
 
         Yields:
             Action chosen by policy for the current state.
@@ -256,26 +254,13 @@ class EligibilityTraceActorCritic:
 
         Returns:
             A trajectory representing the full episode.
-
         """
-        if mode == ActionSamplingMode.EPSILON_GREEDY:
-            epsilon = kwargs.get('epsilon')
-            if not epsilon:
-                warnings.warn(RuntimeWarning(
-                    f'EPSILON_GREEDY sampling chosen but no `epsilon` specific, using default value {DEFAULT_EPSILON}'))
-                epsilon = DEFAULT_EPSILON
-
         episode = []
         state = starting_state
         terminal = False
         while not terminal:
             logprobs = self.policy(state)
-            if mode == ActionSamplingMode.STOCHASTIC:
-                action = pt.distributions.Categorical(logits=logprobs).sample()
-            elif mode == ActionSamplingMode.EPSILON_GREEDY and pt.rand(1).item() <= epsilon:
-                action = pt.randint(0, logprobs.shape[0], (1,))
-            else:  # GREEDY and (1 - epsilon) case of EPSILON_GREEDY
-                action = pt.argmax(logprobs)
+            action = self.sampler.sample(logprobs)
 
             reward, next_state, terminal = yield action
 

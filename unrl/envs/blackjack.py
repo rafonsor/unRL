@@ -18,6 +18,7 @@ import torch as pt
 import torch.nn.functional as F
 
 import unrl.types as t
+from unrl.action_sampling import make_sampler, ActionSamplingMode
 from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
 from unrl.containers import Trajectory
 
@@ -85,8 +86,8 @@ class ExampleStateValueModel(pt.nn.Module):
     def __init__(self, num_state_dims, hidden_dim: int):
         super().__init__()
         self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
-        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
-        self.layer3 = pt.nn.Linear(hidden_dim, 1)
+        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim // 3)
+        self.layer3 = pt.nn.Linear(hidden_dim // 3, 1)
 
     def forward(self, state: pt.Tensor) -> pt.Tensor:
         x = F.relu(self.layer1(state))
@@ -96,24 +97,35 @@ class ExampleStateValueModel(pt.nn.Module):
 
 
 def prepare_game_model(env: gym.Env, eligibility_traces: bool = False) -> ActorCritic:
-    discount_factor = 0.9
-    learning_rate_policy = 1e-8
-    learning_rate_values = 1e-8
-    trace_decay_policy = 0.10
-    trace_decay_values = 0.10
-    hidden_dim_policy = 100
-    hidden_dim_values = 100
+    discount_factor = 0.99
+    learning_rate_policy = 1e-6
+    learning_rate_values = 1e-6
+    trace_decay_policy = 0.1
+    trace_decay_values = 0.1
+    weight_decay_policy = 0.1
+    weight_decay_values = 0.1
+    hidden_dim_policy = 10
+    hidden_dim_values = 30
     num_state_dims = len(env.observation_space)  # noqa, observation_space is a tuple
     num_actions = env.action_space.n
     policy = ExamplePolicy(num_state_dims, num_actions, hidden_dim_policy)
     state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
+    action_sampler = make_sampler(ActionSamplingMode.EPSILON_GREEDY)
     if eligibility_traces:
         actor_critic = EligibilityTraceActorCritic(
-            policy, state_value_model, discount_factor, learning_rate_policy, learning_rate_values, trace_decay_policy,
-            trace_decay_values)
+            policy, state_value_model,
+            discount_factor=discount_factor,
+            learning_rate_policy=learning_rate_policy,
+            learning_rate_values=learning_rate_values,
+            trace_decay_policy=trace_decay_policy,
+            trace_decay_values=trace_decay_values,
+            weight_decay_policy=weight_decay_policy,
+            weight_decay_values=weight_decay_values,
+            action_sampler=action_sampler)
     else:
         actor_critic = ActorCritic(
-            policy, state_value_model, learning_rate_policy, learning_rate_values, discount_factor)
+            policy, state_value_model, discount_factor=discount_factor, learning_rate_policy=learning_rate_policy,
+            learning_rate_values=learning_rate_values, action_sampler=action_sampler)
     return actor_critic
 
 
@@ -129,14 +141,14 @@ if __name__ == '__main__':
     env, obs_to_state = make_blackjack(human=False)
     model = prepare_game_model(env, eligibility_traces=True)
 
-    num_episodes = 10000
+    num_episodes = 50000
     logger.info(f'Playing Blackjack for {num_episodes} episodes')
 
     rewards = []
     for ep in range(num_episodes):
         logger.debug("starting new episode")
         rewards.append(run_episode(env, obs_to_state)[-1].reward)
-        if (ep+1) % 1000 == 0:
+        if (ep+1) % 5000 == 0:
             logger.info(f"[{dt.datetime.now().isoformat()}Episode {ep+1} done")
 
     # Plot accumulated rewards
