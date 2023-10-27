@@ -55,7 +55,7 @@ class DQN:
     def online_optimise(
         self,
         starting_state: pt.Tensor
-    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool], t.Tuple[ContextualTrajectory, float]]:
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[ContextualTrajectory, float]]:
         """Optimise policy and state-value function online for one episode until termination (as determined by caller,
         can include e.g. a forced stoppage after a certain number of episodes).
 
@@ -67,8 +67,9 @@ class DQN:
             Action chosen by policy for the current state.
 
         Receives:
-            Tuple (reward, successor, terminal) containing the reward obtained by applying the action yielded, the
-            resulting successor state, and whether this state is terminal.
+            Tuple (reward, successor, terminal, stop) containing the reward obtained by applying the action yielded, the
+            resulting successor state, and whether this state is terminal. And, finally, an indication of whether to
+            stop irrespective of the ending up in a terminal state.
 
         Returns:
             A tuple with a ContextualTrajectory of SARST transitions representing the full episode and the total loss
@@ -77,14 +78,14 @@ class DQN:
         episode = []
         total_loss = 0
         state = starting_state
-        terminal = False
+        stop = False
         step = 0
-        while not terminal:
+        while not stop:
             step += 1
             action_values = self.behaviour_model(state)
             action = self._sampler.sample(action_values)
 
-            reward, next_state, terminal = yield action
+            reward, next_state, terminal, stop = yield action
 
             transition = ContextualTransition(state, action.type(pt.int), reward, next_state, terminal)
             episode.append(transition)

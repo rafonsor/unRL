@@ -47,7 +47,7 @@ def run_episode(env: gym.Env, transform: t.Callable[[t.Tuple[int]], pt.Tensor]) 
         logger.debug(f'Step {i}: Applying action {action.item()} in state {state}')
         observation, reward, terminated, truncated, _ = env.step(action.item())
         state = transform(observation)
-        info = (reward, state, terminated | truncated)
+        info = (reward, state, terminated, terminated | truncated)
         if env.render_mode == 'human':
             from time import sleep
             sleep(0.5)

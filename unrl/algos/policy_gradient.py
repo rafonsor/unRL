@@ -138,7 +138,7 @@ class ActorCritic:
     @persisted_generator_value
     def online_optimise(self,
                         starting_state: pt.Tensor,
-                        ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool], Trajectory]:
+                        ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], Trajectory]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
@@ -149,8 +149,9 @@ class ActorCritic:
             Action chosen by policy for the current state.
 
         Receives:
-            Tuple (reward, successor, terminal) containing the reward obtained by applying the action yielded, the
-            resulting successor state, and whether this state is terminal.
+            Tuple (reward, successor, terminal, stop) containing the reward obtained by applying the action yielded, the
+            resulting successor state, and whether this state is terminal. And, finally, an indication of whether to
+            stop irrespective of the ending up in a terminal state.
 
         Returns:
             A trajectory representing the full episode.
@@ -159,12 +160,12 @@ class ActorCritic:
         episode = []
         state = starting_state
         I = 1
-        terminal = False
-        while not terminal:
+        stop = False
+        while not stop:
             logprobs = self.policy(state)
             action = self.sampler.sample(logprobs)
 
-            reward, next_state, terminal = yield action
+            reward, next_state, terminal, stop = yield action
 
             # Compute One-step TD-error
             state_value = self.state_value_model(state)
@@ -238,7 +239,7 @@ class EligibilityTraceActorCritic:
     @persisted_generator_value
     def online_optimise(self,
                         starting_state: pt.Tensor,
-                        ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool], Trajectory]:
+                        ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], Trajectory]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
@@ -249,20 +250,21 @@ class EligibilityTraceActorCritic:
             Action chosen by policy for the current state.
 
         Receives:
-            Tuple (reward, successor, terminal) containing the reward obtained by applying the action yielded, the
-            resulting successor state, and whether this state is terminal.
+            Tuple (reward, successor, terminal, bool) containing the reward obtained by applying the action yielded, the
+            resulting successor state, and whether this state is terminal. And, finally, an indication of whether to
+            stop irrespective of the ending up in a terminal state.
 
         Returns:
             A trajectory representing the full episode.
         """
         episode = []
         state = starting_state
-        terminal = False
-        while not terminal:
+        stop = False
+        while not stop:
             logprobs = self.policy(state)
             action = self.sampler.sample(logprobs)
 
-            reward, next_state, terminal = yield action
+            reward, next_state, terminal, stop = yield action
 
             # Compute One-step TD-error
             state_value = self.state_value_model(state)

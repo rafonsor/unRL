@@ -18,6 +18,7 @@ import torch as pt
 import torch.nn.functional as F
 
 import unrl.types as t
+from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
 from unrl.containers import Trajectory
 
@@ -46,7 +47,7 @@ def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> 
         logger.debug(f'Step {i}: Applying action {action.item()} in state {state}')
         observation, reward, terminated, truncated, _ = env.step(action.item())
         state = transform(observation)
-        info = (reward, state, terminated | truncated)
+        info = (reward, state, terminated, terminated | truncated)
 
     episode = gen.value
 
@@ -98,13 +99,20 @@ def prepare_game_model(env: gym.Env, eligibility_traces: bool = False) -> ActorC
     num_actions = env.action_space.n
     policy = ExamplePolicy(num_state_dims, num_actions, hidden_dim_policy)
     state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
+    action_sampler = make_sampler(ActionSamplingMode.EPSILON_GREEDY)
     if eligibility_traces:
         actor_critic = EligibilityTraceActorCritic(
-            policy, state_value_model, discount_factor, learning_rate_policy, learning_rate_values, trace_decay_policy,
-            trace_decay_values)
+            policy, state_value_model,
+            discount_factor=discount_factor,
+            learning_rate_policy=learning_rate_policy,
+            learning_rate_values=learning_rate_values,
+            trace_decay_policy=trace_decay_policy,
+            trace_decay_values=trace_decay_values,
+            action_sampler=action_sampler)
     else:
         actor_critic = ActorCritic(
-            policy, state_value_model, learning_rate_policy, learning_rate_values, discount_factor)
+            policy, state_value_model, discount_factor=discount_factor, learning_rate_policy=learning_rate_policy,
+            learning_rate_values=learning_rate_values, action_sampler=action_sampler)
     return actor_critic
 
 
