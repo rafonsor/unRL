@@ -111,7 +111,7 @@ class DQN:
     @staticmethod
     def _compute_loss(td: t.FloatLike) -> pt.Tensor:
         """Compute MSE loss from One-step TD-error"""
-        return td ** 2
+        return (td ** 2).mean()
 
     def _step(self, td: t.FloatLike) -> float:
         """Compute MSE loss from One-step TD-error to backpropagate gradients and update the behaviour model."""
@@ -159,14 +159,10 @@ class DQNExperienceReplay(DQN):
             One-step TD-errors for each sampled transition as a unidimensional tensor
         """
         # Save experienced transition and sample a minibatch to replay
-        self.experience_buffer.append(*transition)
+        self.experience_buffer.append(transition)
         batch = self.experience_buffer.sample(self.batch_size)
         # Compute One-step TD-errors for all samples
-        targets = batch['reward']
-        targets += (1 - batch['terminal']) * self.discount_factor * self.target_model(batch['next_state']).max(dim=-1)
-        return targets - pt.take_along_dim(self.behaviour_model(batch['state']), batch['action'])
-
-    @staticmethod
-    def _compute_loss(td: t.FloatLike) -> pt.Tensor:
-        """Compute MSE loss from One-step TD-error"""
-        return (td ** 2) / td.shape[0]
+        target_estimates = self.target_model(batch['next_states']).max(dim=-1).values[:, None]  # (BatchSize, 1) shape
+        targets = batch['rewards'] + (1 - batch['terminations']) * self.discount_factor * target_estimates
+        estimates = pt.take_along_dim(self.behaviour_model(batch['states']), batch['actions'].type(pt.long), dim=-1)
+        return targets - estimates

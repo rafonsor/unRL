@@ -14,9 +14,10 @@
 import torch as pt
 import torch.nn.functional as F
 
+import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
-from unrl.algos.dqn import DQN
+from unrl.algos.dqn import DQN, DQNExperienceReplay
 
 
 class ExamplePolicy(Policy):
@@ -94,12 +95,19 @@ def prepare_game_model_actorcritic(num_state_dims: int,
     return actor_critic
 
 
-def prepare_game_model_dqn(num_state_dims: int, num_actions: int) -> DQN:
-    discount_factor = 0.9
-    learning_rate = 1e-8
+def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t.Optional[int] = None) -> DQN:
+    discount_factor = 0.99
+    learning_rate = 1e-4
     epsilon_greedy = 0.1
-    refresh_steps = 500
+    refresh_steps = 250
     hidden_dim = 10
+    replay_minibatch = 32
     action_value_model = ExampleActionValueEstimator(num_state_dims, num_actions, hidden_dim)
-    return DQN(action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
-               epsilon_greedy=epsilon_greedy, target_refresh_steps=refresh_steps)
+    if buffer_size:
+        return DQNExperienceReplay(
+            action_value_model,
+            learning_rate=learning_rate, discount_factor=discount_factor, epsilon_greedy=epsilon_greedy,
+            target_refresh_steps=refresh_steps, replay_memory_capacity=buffer_size, batch_size=replay_minibatch)
+    else:
+        return DQN(action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
+                   epsilon_greedy=epsilon_greedy, target_refresh_steps=refresh_steps)

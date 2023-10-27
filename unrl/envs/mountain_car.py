@@ -34,7 +34,7 @@ def make_mountain_car(human: bool = False) -> t.Tuple[gym.Env, int, int, t.Calla
     return env, num_state_dims, num_actions, transform
 
 
-def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> Trajectory:
+def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> t.Tuple[Trajectory, float]:
     observation, _ = env.reset()
     state = transform(observation)
     terminated = truncated = False
@@ -56,7 +56,7 @@ def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> 
         logger.info('Episode did not complete within the allowed steps.')
 
     logger.debug(f"Episode average loss = {loss:.6f}")
-    return episode
+    return episode, loss
 
 
 if __name__ == '__main__':
@@ -72,7 +72,7 @@ if __name__ == '__main__':
     env, num_state_dims, num_actions, obs_to_state = make_mountain_car(human=False)
     model = prepare_game_model_dqn(num_state_dims, num_actions)
 
-    num_episodes = 2
+    num_episodes = 200
     logger.info(f'Playing MountainCar for {num_episodes} episodes')
 
     rewards = []
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     plt.xlabel('Episode #')
     plt.ylim([-201, 1])
     axy = plt.twinx()
-    axy.plot(pt.Tensor(losses).cumsum(0)/pt.range(1, num_episodes), c='r')
+    axy.plot(pt.Tensor(losses).cumsum(0)/pt.arange(1, num_episodes+1), c='r')
     axy.scatter(range(num_episodes), losses, c='r', s=3)
     axy.set_ylabel('Average episode loss')
     plt.tight_layout()

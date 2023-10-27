@@ -43,7 +43,7 @@ def greedy_action_sampler(logits: pt.Tensor) -> pt.Tensor:
 def epsilon_greedy_action_sampler(logits: pt.Tensor, epsilon: float) -> pt.Tensor:
     if pt.rand(1).item() <= epsilon:
         if len(logits.shape) == 1:
-            logits = logits[None, ...]
+            return pt.randint(0, logits.shape[0], ())
         return pt.randint(0, logits.shape[-1], (logits.shape[0],))
     return greedy_action_sampler(logits)
 

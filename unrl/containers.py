@@ -187,8 +187,8 @@ class ExperienceBuffer(deque):
         states, actions, rewards, next_states, terminations = zip(*batch)
         return {
             "states": pt.stack(states),
-            "actions": pt.stack(actions),
-            "rewards": pt.stack(rewards),
+            "actions": pt.stack(actions)[:, None],  # Expand to shape (BatchSize, 1)
+            "rewards": pt.Tensor(rewards),
             "next_states": pt.stack(next_states),
-            "terminations": pt.Tensor(terminations, dtype=pt.bool),
+            "terminations": pt.Tensor(terminations),
         }
