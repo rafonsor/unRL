@@ -136,9 +136,10 @@ class ActorCritic:
         self.sampler = action_sampler or make_sampler(ActionSamplingMode.GREEDY)
 
     @persisted_generator_value
-    def online_optimise(self,
-                        starting_state: pt.Tensor,
-                        ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], Trajectory]:
+    def online_optimise(
+        self,
+        starting_state: pt.Tensor,
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
@@ -154,10 +155,10 @@ class ActorCritic:
             stop irrespective of the ending up in a terminal state.
 
         Returns:
-            A trajectory representing the full episode.
-
+            A tuple (trajectory, average_loss) containing the trajectory of the full episode and the average TD-error.
         """
         episode = []
+        total_loss = 0
         state = starting_state
         I = 1
         stop = False
@@ -171,6 +172,7 @@ class ActorCritic:
             state_value = self.state_value_model(state)
             next_state_value = pt.Tensor([0]) if terminal else self.state_value_model(next_state)
             error = reward + self.discount_factor * next_state_value - state_value
+            total_loss += error.item()
 
             # Compute and backpropagate gradients
             logprobs[action].backward()
@@ -188,7 +190,7 @@ class ActorCritic:
             I *= self.discount_factor
             state = next_state
 
-        return episode
+        return episode, total_loss / len(episode)
 
 
 class EligibilityTraceActorCritic:
@@ -237,9 +239,10 @@ class EligibilityTraceActorCritic:
         self.sampler = action_sampler or make_sampler(ActionSamplingMode.GREEDY)
 
     @persisted_generator_value
-    def online_optimise(self,
-                        starting_state: pt.Tensor,
-                        ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], Trajectory]:
+    def online_optimise(
+        self,
+        starting_state: pt.Tensor,
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
@@ -255,9 +258,10 @@ class EligibilityTraceActorCritic:
             stop irrespective of the ending up in a terminal state.
 
         Returns:
-            A trajectory representing the full episode.
+            A tuple (trajectory, average_loss) containing the trajectory of the full episode and the average TD-error.
         """
         episode = []
+        total_loss = 0
         state = starting_state
         stop = False
         while not stop:
@@ -270,6 +274,7 @@ class EligibilityTraceActorCritic:
             state_value = self.state_value_model(state)
             next_state_value = pt.Tensor([0]) if terminal else self.state_value_model(next_state)
             error = reward + self.discount_factor * next_state_value - state_value
+            total_loss += error.item()
 
             # Compute and backpropagate gradients
             logprobs[action].backward()
@@ -286,4 +291,4 @@ class EligibilityTraceActorCritic:
         self._optim_policy.episode_reset()
         self._optim_values.episode_reset()
 
-        return episode
+        return episode, total_loss / len(episode)

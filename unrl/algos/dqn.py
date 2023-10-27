@@ -97,7 +97,7 @@ class DQN:
             if step % self.target_refresh_steps == 0:
                 self.target_model = deepcopy(self.behaviour_model)
 
-        return episode, total_loss
+        return episode, total_loss / len(episode)
 
     def _compute_td_error(self, action_values: pt.Tensor, transition: ContextualTransition) -> pt.Tensor:
         """Compute the One-step TD-error using the SARST transition and the current state's action-value estimates
@@ -108,10 +108,15 @@ class DQN:
             target = self.discount_factor * self.target_model(transition.next_state).max()
         return target - action_values[transition.action]
 
+    @staticmethod
+    def _compute_loss(td: t.FloatLike) -> pt.Tensor:
+        """Compute MSE loss from One-step TD-error"""
+        return td ** 2
+
     def _step(self, td: t.FloatLike) -> float:
         """Compute MSE loss from One-step TD-error to backpropagate gradients and update the behaviour model."""
         # Compute aggregated loss and backpropagate gradients
-        loss = (td ** 2) / len(td)
+        loss = self._compute_loss(td)
         loss.backward()
         # Update parameters
         self._optim.step()
@@ -160,3 +165,8 @@ class DQNExperienceReplay(DQN):
         targets = batch['reward']
         targets += (1 - batch['terminal']) * self.discount_factor * self.target_model(batch['next_state']).max(dim=-1)
         return targets - pt.take_along_dim(self.behaviour_model(batch['state']), batch['action'])
+
+    @staticmethod
+    def _compute_loss(td: t.FloatLike) -> pt.Tensor:
+        """Compute MSE loss from One-step TD-error"""
+        return (td ** 2) / td.shape[0]
