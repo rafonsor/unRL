@@ -16,7 +16,10 @@ from typing import *
 from numpy.typing import NDArray  # noqa
 import torch as pt
 
-IntLike: TypeAlias = int | pt.IntType | pt.IntTensor
-FloatLike: TypeAlias = float | pt.FloatType | pt.FloatTensor
-
 TensorList: TypeAlias = List[pt.Tensor]
+IntLike: TypeAlias = int | pt.IntType | pt.IntTensor | pt.Tensor
+FloatLike: TypeAlias = float | pt.FloatType | pt.FloatTensor | pt.Tensor
+
+# State-Action-Reward-NextState tuples
+SoftSARS: TypeAlias = Tuple[pt.Tensor, IntLike, FloatLike, Optional[pt.Tensor]]  # state is terminal when no next state
+SARST: TypeAlias = Tuple[pt.Tensor, IntLike, FloatLike, pt.Tensor, bool]  # Indicates whether next state is terminal

@@ -25,10 +25,17 @@ class Transition:
     reward: t.FloatLike
     next_state: pt.Tensor
 
+    def __iter__(self) -> t.Generator[t.Any, None, None]:
+        return (getattr(self, field) for field in self.__class__.__dataclass_fields__)
+
+
+@dataclass
+class ContextualTransition(Transition):
+    terminates: bool
+
 
 Trajectory: t.TypeAlias = t.Sequence[Transition]
-
-SoftSARS: t.TypeAlias = t.Tuple[pt.Tensor, t.IntLike, t.FloatLike, t.Optional[pt.Tensor]]
+ContextualTrajectory: t.TypeAlias = t.Sequence[ContextualTransition]
 
 
 # TODO: Improvement (2023-10-24)
@@ -81,7 +88,7 @@ class FrozenTrajectory:
         return cls(states, actions, rewards, next_states)
 
     @classmethod
-    def from_tuples(cls, trajectory: t.Sequence[SoftSARS]) -> "FrozenTrajectory":
+    def from_tuples(cls, trajectory: t.Sequence[t.SoftSARS]) -> "FrozenTrajectory":
         n = len(trajectory)
         assert n, "Cannot instantiate a FrozenTrajectory from an empty list of transitions"
         _, action, reward, next_state = trajectory[0]
@@ -142,7 +149,7 @@ class FrozenTrajectory:
     def __iter__(self):
         return [self.__transition(i) for i in range(self.n)]
 
-    def __transition(self, i: int) -> SoftSARS:
+    def __transition(self, i: int) -> t.SoftSARS:
         if 0 > i or i >= self.n:
             raise IndexError(f"Trajectory index {i} is out of bounds for size {self.n}")
 
