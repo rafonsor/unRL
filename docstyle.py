@@ -83,7 +83,7 @@ class ExampleClass:
             bulletin of mathematical biophysics, 5, pp. 115-133.
         [#] <Last Name>, <Initials> (<Year>). [Section|Chapter> <#[-#]>]"<Book Title Respecting the Title Case Style>".
             <Publisher>.
-        [#] <Last Name>, <Initials>, & <Last Name>, <Initials>, & <Last Name>, <Initials>, & et al. (<Year>). "<Document
+        [#] <Last Name>, <Initials>, <Last Name>, <Initials>, <Last Name>, <Initials>, & et al. (<Year>). "<Document
             Title Respecting the Title Case Style>". <Publication>[, <volume>][, pp. <FirstPage#-LastPage#].
     """
 

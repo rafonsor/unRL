@@ -17,7 +17,7 @@ import torch.nn.functional as F
 import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
-from unrl.algos.dqn import DQN, DQNExperienceReplay
+from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN
 
 
 class ExamplePolicy(Policy):
@@ -95,7 +95,7 @@ def prepare_game_model_actorcritic(num_state_dims: int,
     return actor_critic
 
 
-def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t.Optional[int] = None) -> DQN:
+def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t.Optional[int] = None, double: bool = False) -> DQN:
     discount_factor = 0.99
     learning_rate = 1e-4
     epsilon_greedy = 0.1
@@ -103,11 +103,23 @@ def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t
     hidden_dim = 10
     replay_minibatch = 32
     action_value_model = ExampleActionValueEstimator(num_state_dims, num_actions, hidden_dim)
+    model_kwargs = {
+        "learning_rate": learning_rate,
+        "discount_factor": discount_factor,
+        "epsilon_greedy": epsilon_greedy,
+        "target_refresh_steps": refresh_steps,
+        "replay_memory_capacity": buffer_size,
+        "batch_size": replay_minibatch
+    }
     if buffer_size:
-        return DQNExperienceReplay(
-            action_value_model,
-            learning_rate=learning_rate, discount_factor=discount_factor, epsilon_greedy=epsilon_greedy,
-            target_refresh_steps=refresh_steps, replay_memory_capacity=buffer_size, batch_size=replay_minibatch)
+        model_kwargs.update({
+            "replay_memory_capacity": buffer_size,
+            "batch_size": replay_minibatch
+        })
+        if double:
+            dqn = DoubleDQN
+        else:
+            dqn = DQNExperienceReplay
     else:
-        return DQN(action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
-                   epsilon_greedy=epsilon_greedy, target_refresh_steps=refresh_steps)
+        dqn = DQN
+    return dqn(action_value_model, **model_kwargs)

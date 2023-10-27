@@ -72,7 +72,7 @@ if __name__ == '__main__':
     logger.setLevel(logging.DEBUG)
 
     env, num_state_dims, num_actions, obs_to_state = make_cart_pole(human=False)
-    model = prepare_game_model_dqn(num_state_dims, num_actions, buffer_size=10000)
+    model = prepare_game_model_dqn(num_state_dims, num_actions, buffer_size=10000, double=True)
 
     num_episodes = 10000
     logger.info(f'Playing MountainCar for {num_episodes} episodes')

@@ -19,7 +19,7 @@ from torch.optim import SGD
 
 import unrl.types as t
 from unrl.config import validate_config
-from unrl.action_sampling import EpsilonGreedyActionSampler
+from unrl.action_sampling import EpsilonGreedyActionSampler, GreedyActionSampler
 from unrl.containers import ContextualTransition, ContextualTrajectory, ExperienceBuffer
 from unrl.utils import persisted_generator_value
 
@@ -28,7 +28,7 @@ class DQN:
     """Basic Deep Q-Network (without an Experience Replay buffer), adapted from [1]_.
 
     References:
-        [1] Mnih, V. & Kavukcuoglu, K. & Silver, D., et al. (2015). "Human-level control through deep reinforcement
+        [1] Mnih, V., Kavukcuoglu, K. & Silver, D., et al. (2015). "Human-level control through deep reinforcement
             learning". Nature, 518, pp. 529-533.
     """
     def __init__(self,
@@ -128,7 +128,7 @@ class DQNExperienceReplay(DQN):
     """Deep Q-Network with an Experience Replay buffer as originally proposed by [1]_.
 
     References:
-        [1] Mnih, V. & Kavukcuoglu, K. & Silver, D., et al. (2015). "Human-level control through deep reinforcement
+        [1] Mnih, V., Kavukcuoglu, K. & Silver, D., et al. (2015). "Human-level control through deep reinforcement
             learning". Nature, 518, pp. 529-533.
     """
     def __init__(self,
@@ -163,6 +163,57 @@ class DQNExperienceReplay(DQN):
         batch = self.experience_buffer.sample(self.batch_size)
         # Compute One-step TD-errors for all samples
         target_estimates = self.target_model(batch['next_states']).max(dim=-1).values[:, None]  # (BatchSize, 1) shape
+        targets = batch['rewards'] + (1 - batch['terminations']) * self.discount_factor * target_estimates
+        estimates = pt.take_along_dim(self.behaviour_model(batch['states']), batch['actions'].type(pt.long), dim=-1)
+        return targets - estimates
+
+
+class DoubleDQN(DQNExperienceReplay):
+    """Deep Q-Network adapted to use double Q-learning as a way to mitigate the overestimation bias, introduced by
+     maximising over the action-values of the target model, through resampling actions from the behaviour model.
+
+    References:
+        [1] Van Hasselt, H., Guez, A., & Silver, D. (2016). "Deep reinforcement learning with double q-learning". In
+            Proceedings of the AAAI conference on artificial intelligence, 30.
+    """
+    def __init__(self,
+                 action_value_model: pt.nn.Module,
+                 *,
+                 learning_rate: float,
+                 discount_factor: float,
+                 epsilon_greedy: float,
+                 target_refresh_steps: int,
+                 replay_memory_capacity: int,
+                 batch_size: int):
+        super().__init__(action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
+                         epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
+                         replay_memory_capacity=replay_memory_capacity, batch_size=batch_size)
+        self._training_sampler = GreedyActionSampler()
+
+    def _compute_td_error(self, action_values: pt.Tensor, transition: ContextualTransition) -> pt.Tensor:
+        """Compute the One-step TD-errors for a minibatch of sampled experiences. The experienced SARST transition is
+        added to the Experience buffer beforehand.
+
+        Action-value estimates for all starting states are recomputed on the spot using the behaviour model.
+
+        Args:
+            action_values: (NotUsed)
+            transition: SARST transition to add to the Experience buffer.
+
+        Returns:
+            One-step TD-errors for each sampled transition as a unidimensional tensor
+        """
+        # Save experienced transition and sample a minibatch to replay
+        self.experience_buffer.append(transition)
+        batch = self.experience_buffer.sample(self.batch_size)
+        # Compute One-step TD-errors for all samples
+        target_estimates = pt.take_along_dim(
+            self.target_model(batch['next_states']),
+            # Double Q-learning uses the behaviour model to select the best action instead of directly maximising over
+            # the target network's action-value estimates, which are known to result in overestimation.
+            self._training_sampler.sample(self.behaviour_model(batch['next_states']))[:, None].type(pt.long),
+            dim=-1
+        )
         targets = batch['rewards'] + (1 - batch['terminations']) * self.discount_factor * target_estimates
         estimates = pt.take_along_dim(self.behaviour_model(batch['states']), batch['actions'].type(pt.long), dim=-1)
         return targets - estimates
