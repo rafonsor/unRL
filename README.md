@@ -1,5 +1,5 @@
 # unRL
-unRL (AKA "_unreal_") is a set of libraries providing Reinforcement Learning algorithms written in pure Python or leveraging Jax.
+unRL (AKA "_unreal_") is a set of libraries providing Reinforcement Learning algorithms implemented with PyTorch and Jax frameworks.
 
 The scope of RL algorithms considered is not yet defined, but meant to be broad. So, whether the prefix stands for "_universal_", (deep) "_unsupervised_", or simply "_(f)un_" is not important.
 
