@@ -15,24 +15,23 @@ import logging
 
 import gymnasium as gym
 import torch as pt
-import torch.nn.functional as F
 
 import unrl.types as t
-from unrl.action_sampling import ActionSamplingMode, make_sampler
-from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
 from unrl.containers import Trajectory
 
 logger = logging.getLogger(__name__)
 
 
-def make_mountain_car(human: bool = False) -> t.Tuple[gym.Env, t.Callable[[t.NDArray], pt.Tensor]]:
+def make_mountain_car(human: bool = False) -> t.Tuple[gym.Env, int, int, t.Callable[[t.NDArray], pt.Tensor]]:
     env = gym.make('MountainCar-v0', render_mode="human" if human else None)
+    num_state_dims = env.observation_space.shape[0]
+    num_actions = env.action_space.n
     bounds = pt.Tensor(env.observation_space.high - env.observation_space.low)
 
     def transform(obs: t.NDArray) -> pt.Tensor:
         return (pt.Tensor(obs) + env.observation_space.high) / bounds
 
-    return env, transform
+    return env, num_state_dims, num_actions, transform
 
 
 def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> Trajectory:
@@ -49,71 +48,15 @@ def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> 
         state = transform(observation)
         info = (reward, state, terminated, terminated | truncated)
 
-    episode = gen.value
+    (episode, loss) = gen.value
 
     if terminated:
         logger.info(f'Won the game after {len(episode)} steps.')
     elif truncated:
         logger.info('Episode did not complete within the allowed steps.')
 
+    logger.debug(f"Episode average loss = {loss:.6f}")
     return episode
-
-
-class ExamplePolicy(Policy):
-    def __init__(self, num_state_dims: int, num_actions: int, hidden_dim: int):
-        super().__init__()
-        self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
-        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
-        self.layer3 = pt.nn.Linear(hidden_dim, num_actions)
-        self.logsm = pt.nn.LogSoftmax(0)
-
-    def forward(self, state: pt.Tensor) -> pt.Tensor:
-        x = F.relu(self.layer1(state))
-        x = F.relu(self.layer2(x))
-        return self.logsm(self.layer3(x))
-
-
-class ExampleStateValueModel(pt.nn.Module):
-    def __init__(self, num_state_dims, hidden_dim: int):
-        super().__init__()
-        self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
-        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
-        self.layer3 = pt.nn.Linear(hidden_dim, 1)
-
-    def forward(self, state: pt.Tensor) -> pt.Tensor:
-        x = F.relu(self.layer1(state))
-        x = F.relu(self.layer2(x))
-        estimate = -F.relu(self.layer3(x))
-        return estimate
-
-
-def prepare_game_model(env: gym.Env, eligibility_traces: bool = False) -> ActorCritic:
-    discount_factor = 0.9
-    learning_rate_policy = 1e-8
-    learning_rate_values = 1e-8
-    trace_decay_policy = 0.10
-    trace_decay_values = 0.10
-    hidden_dim_policy = 10
-    hidden_dim_values = 10
-    num_state_dims = env.observation_space.shape[0]  # noqa, observation_space is a tuple
-    num_actions = env.action_space.n
-    policy = ExamplePolicy(num_state_dims, num_actions, hidden_dim_policy)
-    state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
-    action_sampler = make_sampler(ActionSamplingMode.EPSILON_GREEDY)
-    if eligibility_traces:
-        actor_critic = EligibilityTraceActorCritic(
-            policy, state_value_model,
-            discount_factor=discount_factor,
-            learning_rate_policy=learning_rate_policy,
-            learning_rate_values=learning_rate_values,
-            trace_decay_policy=trace_decay_policy,
-            trace_decay_values=trace_decay_values,
-            action_sampler=action_sampler)
-    else:
-        actor_critic = ActorCritic(
-            policy, state_value_model, discount_factor=discount_factor, learning_rate_policy=learning_rate_policy,
-            learning_rate_values=learning_rate_values, action_sampler=action_sampler)
-    return actor_critic
 
 
 if __name__ == '__main__':
@@ -121,19 +64,24 @@ if __name__ == '__main__':
 
     from matplotlib import pyplot as plt
 
+    from unrl.envs.test_models import prepare_game_model_dqn
+
     logging.basicConfig(level=logging.INFO)
     logger.setLevel(logging.DEBUG)
 
-    env, obs_to_state = make_mountain_car(human=False)
-    model = prepare_game_model(env, eligibility_traces=True)
+    env, num_state_dims, num_actions, obs_to_state = make_mountain_car(human=False)
+    model = prepare_game_model_dqn(num_state_dims, num_actions)
 
-    num_episodes = 200
+    num_episodes = 2
     logger.info(f'Playing MountainCar for {num_episodes} episodes')
 
     rewards = []
+    losses = []
     for ep in range(num_episodes):
         logger.debug("starting new episode")
-        rewards.append(-len(run_episode(env, obs_to_state)))
+        (episode, loss) = run_episode(env, obs_to_state)
+        rewards.append(-len(episode))
+        losses.append(loss)
         if (ep+1) % 1000 == 0:
             logger.info(f"[{dt.datetime.now().isoformat()}Episode {ep+1} done")
 
@@ -143,4 +91,9 @@ if __name__ == '__main__':
     plt.ylabel('Episode penalty')
     plt.xlabel('Episode #')
     plt.ylim([-201, 1])
+    axy = plt.twinx()
+    axy.plot(pt.Tensor(losses).cumsum(0)/pt.range(1, num_episodes), c='r')
+    axy.scatter(range(num_episodes), losses, c='r', s=3)
+    axy.set_ylabel('Average episode loss')
+    plt.tight_layout()
     plt.show()
