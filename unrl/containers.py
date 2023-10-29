@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-from collections import deque
 from dataclasses import dataclass
 
 import torch as pt
@@ -162,33 +161,3 @@ class FrozenTrajectory:
         else:
             next_state = self.__next_states[i]
         return state, action, reward, next_state
-
-
-class ExperienceBuffer(deque):
-    def sample(self, n: int) -> t.SARST | t.Dict[str, pt.Tensor]:
-        """Sample one or more experienced state transitions of the SARST form (with a termination flag relative to the
-        next state). Sampling is with repetition.
-
-        Args:
-            n: number of transitions to retrieve.
-
-        Raises:
-            RuntimeError: attempting to sample from an empty buffer.
-
-        Returns: a SARST tuple when a single sample is requested. Otherwise, transitions are merged into a dictionary
-                 of stacked tensors for each type of transition value.
-        """
-        if len(self) == 0:
-            raise RuntimeError("Cannot sample from an empty ExperienceBuffer")
-        indices = pt.randint(0, len(self), (n,))
-        if n == 1:
-            return self[indices.item()]
-        batch = [self[idx.item()] for idx in indices]
-        states, actions, rewards, next_states, terminations = zip(*batch)
-        return {
-            "states": pt.stack(states),
-            "actions": pt.stack(actions)[:, None],  # Expand to shape (BatchSize, 1)
-            "rewards": pt.Tensor(rewards),
-            "next_states": pt.stack(next_states),
-            "terminations": pt.Tensor(terminations),
-        }
