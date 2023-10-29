@@ -53,7 +53,7 @@ def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> 
     (episode, loss) = gen.value
 
     if terminated:
-        logger.info(f'Won the game after {len(episode)} steps.')
+        logger.info(f'Concluded the game after {len(episode)} steps.')
     elif truncated:
         logger.info('Episode did not complete within the allowed steps.')
 
@@ -75,7 +75,7 @@ if __name__ == '__main__':
     model = prepare_game_model_dqn(num_state_dims, num_actions, buffer_size=10000, priority=True, double=True)
 
     num_episodes = 10000
-    logger.info(f'Playing MountainCar for {num_episodes} episodes')
+    logger.info(f'Playing CartPole for {num_episodes} episodes')
 
     rewards = []
     losses = []
@@ -83,6 +83,7 @@ if __name__ == '__main__':
         logger.debug("starting new episode")
         (episode, loss) = run_episode(env, obs_to_state)
         rewards.append(len(episode))
+        del episode
         losses.append(loss)
         if (ep+1) % 1000 == 0:
             logger.info(f"[{dt.datetime.now().isoformat()}Episode {ep+1} done")

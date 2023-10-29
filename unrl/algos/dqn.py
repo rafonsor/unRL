@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 """Deep Q-Learning and variants"""
+import gc
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
 
@@ -126,7 +127,14 @@ class DQN:
             total_loss += self._step(error)
 
             if step % self.target_refresh_steps == 0:
-                self.target_model = deepcopy(self.behaviour_model)
+                self.target_model.load_state_dict(self.behaviour_model.state_dict())
+
+            del action_values
+            del action
+            del error
+
+            if step % 1000 == 0:
+                gc.collect()
 
         return episode, total_loss / len(episode)
 
@@ -145,10 +153,8 @@ class DQN:
 
     def _step(self, td: t.FloatLike) -> float:
         """Compute MSE loss from One-step TD-error to backpropagate gradients and update the behaviour model."""
-        # Compute aggregated loss and backpropagate gradients
         loss = self._compute_loss(td)
         loss.backward()
-        # Update parameters
         self._optim.step()
         self._optim.zero_grad()
         return loss.item()
@@ -335,6 +341,8 @@ class DQNPrioritisedExperienceReplay(_DQNExperienceReplayBase):
         # Re-prioritise sampled transitions. Note, priorities are exponentiated before passing to priority buffer.
         updated_priorities = errors.abs() ** self.alpha
         self._experience_buffer.set_priority(metadata['indices'], updated_priorities)
+        del batch
+        del metadata
         return errors
 
 

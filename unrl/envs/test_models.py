@@ -99,9 +99,9 @@ def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t
     discount_factor = 0.99
     learning_rate = 1e-4
     epsilon_greedy = 0.1
-    refresh_steps = 250
-    hidden_dim = 25
-    replay_minibatch = 32
+    refresh_steps = 1000
+    hidden_dim = 60
+    replay_minibatch = 64
     per_alpha = 0.7
     per_beta = 0.5
     action_value_model = ExampleActionValueEstimator(num_state_dims, num_actions, hidden_dim)
