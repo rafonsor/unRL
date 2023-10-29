@@ -17,7 +17,7 @@ import torch.nn.functional as F
 import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
-from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN
+from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
 
 
 class ExamplePolicy(Policy):
@@ -95,13 +95,15 @@ def prepare_game_model_actorcritic(num_state_dims: int,
     return actor_critic
 
 
-def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t.Optional[int] = None, double: bool = False) -> DQN:
+def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t.Optional[int] = None, priority: bool = False, double: bool = False) -> DQN:
     discount_factor = 0.99
     learning_rate = 1e-4
     epsilon_greedy = 0.1
     refresh_steps = 250
-    hidden_dim = 10
+    hidden_dim = 25
     replay_minibatch = 32
+    per_alpha = 0.7
+    per_beta = 0.5
     action_value_model = ExampleActionValueEstimator(num_state_dims, num_actions, hidden_dim)
     model_kwargs = {
         "learning_rate": learning_rate,
@@ -116,10 +118,20 @@ def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t
             "replay_memory_capacity": buffer_size,
             "batch_size": replay_minibatch
         })
-        if double:
-            dqn = DoubleDQN
+        if priority:
+            model_kwargs.update({
+                "alpha": per_alpha,
+                "beta": per_beta
+            })
+            if double:
+                dqn = PrioritisedDoubleDQN
+            else:
+                dqn = DQNPrioritisedExperienceReplay
         else:
-            dqn = DQNExperienceReplay
+            if double:
+                dqn = DoubleDQN
+            else:
+                dqn = DQNExperienceReplay
     else:
         dqn = DQN
     return dqn(action_value_model, **model_kwargs)

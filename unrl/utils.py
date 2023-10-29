@@ -11,6 +11,9 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from contextlib import contextmanager
+from threading import Lock
+
 import unrl.types as t
 
 from functools import wraps
@@ -37,3 +40,13 @@ def persisted_generator_value(fn: t.Callable[..., t.Generator[..., ..., t.Any]])
         return PersistentValueGenerator(fn(*args, **kwargs))
 
     return decorated
+
+
+@contextmanager
+def optional_lock(mutex: t.Optional[Lock]):
+    """Acquire a lock, if provided, before handing back control of flow."""
+    if mutex is not None:
+        with mutex:
+            yield
+    else:
+        yield

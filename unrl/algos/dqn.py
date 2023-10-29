@@ -22,7 +22,8 @@ import unrl.types as t
 from unrl.config import validate_config
 from unrl.action_sampling import EpsilonGreedyActionSampler, GreedyActionSampler
 from unrl.containers import ContextualTransition, ContextualTrajectory
-from unrl.experience_buffer import ExperienceBuffer, NaivePrioritisedExperienceBuffer, ExperienceBufferProtocol
+from unrl.experience_buffer import ExperienceBufferProtocol, ExperienceBuffer, NaivePrioritisedExperienceBuffer, \
+    RankPartitionedPrioritisedExperienceBuffer
 from unrl.utils import persisted_generator_value
 
 __all__ = [
@@ -34,9 +35,9 @@ __all__ = [
 ]
 
 
-def onestep_td_error(reward: t.FloatLike,
-                     discount_factor: t.FloatLike,
+def onestep_td_error(discount_factor: t.FloatLike,
                      value: pt.Tensor,
+                     reward: t.FloatLike,
                      successor_value: pt.Tensor,
                      terminal: t.BoolLike,
                      ) -> pt.Tensor:
@@ -69,7 +70,6 @@ class DQN:
                  discount_factor: float,
                  epsilon_greedy: float,
                  target_refresh_steps: int):
-        super().__init__()
         validate_config(learning_rate, "learning_rate", "unitpositive")
         validate_config(discount_factor, "discount_factor", "unitpositive")
         validate_config(target_refresh_steps, "target_refresh_steps", "positive")
@@ -137,9 +137,9 @@ class DQN:
 
     def _compute_td_error_transition(self, action_values: pt.Tensor, transition: ContextualTransition) -> pt.Tensor:
         return onestep_td_error(
-            transition.reward,
             self.discount_factor,
             action_values[transition.action],
+            transition.reward,
             self.target_model(transition.next_state).max(),
             transition.terminates)
 
@@ -204,7 +204,7 @@ class _DQNExperienceReplayBase(DQN, metaclass=ABCMeta):
         Returns:
             Unidimensional tensor of TD-errors
         """
-        values = pt.take_along_dim(self.behaviour_model(batch['states']), batch['actions'].type(pt.long), dim=-1)
+        values = pt.take_along_dim(self.behaviour_model(batch['states']), batch['actions'].type(pt.long), dim=-1)[:, 0]
         successor_values = self.target_model(batch['next_states']).max(dim=-1).values
         return onestep_td_error(self.discount_factor, values, batch['rewards'], successor_values, batch['terminations'])
 
@@ -277,11 +277,16 @@ class DQNPrioritisedExperienceReplay(_DQNExperienceReplayBase):
                  replay_memory_capacity: int,
                  batch_size: int,
                  alpha: float,
-                 beta: float):
+                 beta: float,
+                 use_ranks: bool = True):
         super().__init__(action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
                          epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
                          replay_memory_capacity=replay_memory_capacity, batch_size=batch_size)
-        self._experience_buffer = NaivePrioritisedExperienceBuffer(maxlen=self.replay_memory_capacity)
+        if use_ranks:
+            self._experience_buffer = RankPartitionedPrioritisedExperienceBuffer(maxlen=self.replay_memory_capacity,
+                                                                                 partitions=batch_size)
+        else:
+            self._experience_buffer = NaivePrioritisedExperienceBuffer(maxlen=self.replay_memory_capacity)
         self.alpha = alpha
         self.beta = beta
 
@@ -353,6 +358,7 @@ class _DoubleDQNBase:
 
     def _compute_td_error_batch(self, batch: t.Dict[str, pt.Tensor]) -> pt.Tensor:
         # Compute One-step TD-errors for all samples
+        values = pt.take_along_dim(self.behaviour_model(batch['states']), batch['actions'].type(pt.long), dim=-1)[:, 0]
         successor_values = pt.take_along_dim(
             self.target_model(batch['next_states']),
             # Double Q-learning uses the behaviour model to select the best action instead of directly maximising over
@@ -360,7 +366,6 @@ class _DoubleDQNBase:
             self._training_sampler.sample(self.behaviour_model(batch['next_states']))[:, None].type(pt.long),
             dim=-1
         )
-        values = pt.take_along_dim(self.behaviour_model(batch['states']), batch['actions'].type(pt.long), dim=-1)
         return onestep_td_error(self.discount_factor, values, batch['rewards'], successor_values, batch['terminations'])
 
 
@@ -381,10 +386,11 @@ class DoubleDQN(DQNExperienceReplay, _DoubleDQNBase):
                  target_refresh_steps: int,
                  replay_memory_capacity: int,
                  batch_size: int):
-        super().__init__(action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
-                         epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
-                         replay_memory_capacity=replay_memory_capacity, batch_size=batch_size)
-        super().__init__()
+        DQNExperienceReplay.__init__(
+            self, action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
+            epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
+            replay_memory_capacity=replay_memory_capacity, batch_size=batch_size)
+        _DoubleDQNBase.__init__(self)
 
 
 class PrioritisedDoubleDQN(DQNPrioritisedExperienceReplay, _DoubleDQNBase):
@@ -405,9 +411,12 @@ class PrioritisedDoubleDQN(DQNPrioritisedExperienceReplay, _DoubleDQNBase):
                  epsilon_greedy: float,
                  target_refresh_steps: int,
                  replay_memory_capacity: int,
-                 batch_size: int):
-        super().__init__(action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
-                         epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
-                         replay_memory_capacity=replay_memory_capacity, batch_size=batch_size)
-        super().__init__()
+                 batch_size: int,
+                 alpha: float,
+                 beta: float):
+        DQNPrioritisedExperienceReplay.__init__(
+            self, action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
+            epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
+            replay_memory_capacity=replay_memory_capacity, batch_size=batch_size, alpha=alpha, beta=beta)
+        _DoubleDQNBase.__init__(self)
 
