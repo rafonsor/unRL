@@ -20,9 +20,11 @@ import unrl.types as t
 from unrl.config import validate_config
 from unrl.containers import ContextualTransition
 
+IndexedSARSTBatch: t.TypeAlias = t.Tuple[t.Dict[str, pt.Tensor], t.Dict[str, pt.Tensor]]
+
 
 class ExperienceBufferProtocol(t.Protocol):
-    def sample(self, n: int) -> t.SARST | t.Dict[str, pt.Tensor]:
+    def sample(self, n: int) -> IndexedSARSTBatch:
         ...
 
     def append(self, transition: t.SARST | ContextualTransition, *args):
@@ -30,7 +32,7 @@ class ExperienceBufferProtocol(t.Protocol):
 
 
 class ExperienceBuffer(ExperienceBufferProtocol, deque):
-    def sample(self, n: int) -> t.SARST | t.Dict[str, pt.Tensor]:
+    def sample(self, n: int) -> IndexedSARSTBatch:
         """Sample one or more experienced state transitions of the SARST form (with a termination flag relative to the
         next state). Sampling is with replacement.
 
@@ -40,23 +42,23 @@ class ExperienceBuffer(ExperienceBufferProtocol, deque):
         Raises:
             RuntimeError: attempting to sample from an empty buffer.
 
-        Returns: a SARST tuple when a single sample is requested. Otherwise, transitions are merged into a dictionary
-                 of stacked tensors for each type of transition value.
+        Returns:
+            A tuple (batch, sampling metadata) containing a collection of SARST transitions and a metadata dictionary
+            from the sampling process that includes at least "indices". Transitions are merged into a dictionary
+            of stacked tensors for each type of transition value.
         """
         if len(self) == 0:
             raise RuntimeError("Cannot sample from an empty ExperienceBuffer")
         indices = pt.randint(0, len(self), (n,))
-        if n == 1:
-            return self[indices.item()]
-        batch = [self[idx.item()] for idx in indices]
-        states, actions, rewards, next_states, terminations = zip(*batch)
-        return {
+        states, actions, rewards, next_states, terminations = zip(*[self[idx.item()] for idx in indices])
+        batch = {
             "states": pt.stack(states),
             "actions": pt.stack(actions)[:, None],  # Expand to shape (BatchSize, 1)
             "rewards": pt.Tensor(rewards),
             "next_states": pt.stack(next_states),
             "terminations": pt.Tensor(terminations),
         }
+        return batch, {"indices": indices}
 
 
 class NaivePrioritisedExperienceBuffer(ExperienceBufferProtocol):
@@ -110,10 +112,10 @@ class NaivePrioritisedExperienceBuffer(ExperienceBufferProtocol):
         self._transitions[idx] = transition
         self._priorities[idx] = priority
 
-    def sample(self, n: int) -> t.SARST | t.Dict[str, pt.Tensor]:
+    def sample(self, n: int) -> IndexedSARSTBatch:
         """Sample one or more experienced state transitions of the SARST form (with a flag indicating whether the
         resulting next state is terminal). Sampling is with replacement and according to a probability distribution of
-        priorities.
+        priorities assigned to each stored transition.
 
         Args:
             n: number of transitions to retrieve.
@@ -121,24 +123,35 @@ class NaivePrioritisedExperienceBuffer(ExperienceBufferProtocol):
         Raises:
             RuntimeError: attempting to sample from an empty buffer.
 
-        Returns: a SARST tuple when a single sample is requested. Otherwise, transitions are merged into a dictionary
-                 of stacked tensors for each type of transition value.
+        Returns:
+            A tuple (batch, sampling metadata) containing a collection of SARST transitions and a metadata dictionary
+            from the sampling process that includes at least "indices". Transitions are merged into a dictionary
+            of stacked tensors for each type of transition value.
         """
         if len(self._indices) == 0:
             raise RuntimeError(f"Cannot sample from an empty {self.__class__.__name__}")
         with self.__mutex:
-            batch = [
-                self._transitions[loc]
-                for loc
-                in pt.distributions.Categorical(probs=self._priorities/self._priorities.sum()).sample((n,))  # noqa
-            ]
-        if n == 1:
-            return batch[0]
+            probs = self._priorities/self._priorities.sum()
+            indices = pt.distributions.Categorical(probs=probs).sample((n,))  # noqa
+            batch = [self._transitions[idx] for idx in indices]
         states, actions, rewards, next_states, terminations = zip(*batch)
-        return {
+        batch = {
             "states": pt.stack(states),
             "actions": pt.stack(actions)[:, None],  # Expand to shape (BatchSize, 1)
             "rewards": pt.Tensor(rewards),
             "next_states": pt.stack(next_states),
             "terminations": pt.Tensor(terminations),
         }
+        metadata = {"indices": indices, "probabilities": probs[indices]}
+        return batch, metadata
+
+    def set_priority(self, indices: pt.Tensor, priorities: pt.Tensor):
+        """Update priority values of existing transitions.
+
+        Args:
+            indices: transitions to re-prioritise, identified by the index included in a previous sampling.
+            priorities: new priority values.
+        """
+        assert indices.shape == priorities.shape, "Inputs dimensions mismatch, cannot update priority values."
+        with self.__mutex:
+            self._priorities[indices] = priorities

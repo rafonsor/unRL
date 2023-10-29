@@ -19,6 +19,7 @@ import torch as pt
 TensorList: TypeAlias = List[pt.Tensor]
 IntLike: TypeAlias = int | pt.IntType | pt.IntTensor | pt.Tensor
 FloatLike: TypeAlias = float | pt.FloatType | pt.FloatTensor | pt.Tensor
+BoolLike: TypeAlias = bool | pt.BoolType | pt.BoolTensor | pt.Tensor
 
 # State-Action-Reward-NextState tuples
 SoftSARS: TypeAlias = Tuple[pt.Tensor, IntLike, FloatLike, Optional[pt.Tensor]]  # state is terminal when no next state
