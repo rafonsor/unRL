@@ -121,11 +121,13 @@ class EligibilityTraceOptimizer(pt.optim.Optimizer):
             closure (Callable, optional): A closure that reevaluates the model
                 and returns the loss.
         """
-        assert closure is not None, f"{self.__class__.__name__}.step must receive a closure that provides a TD(0)-error"
         self._cuda_graph_capture_health_check()
 
-        with pt.enable_grad():
-            loss = closure()
+        if closure is not None:
+            with pt.enable_grad():
+                loss = closure()
+        else:
+            loss = 1
 
         for group in self.param_groups:
             params_with_grad = []

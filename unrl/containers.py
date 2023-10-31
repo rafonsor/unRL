@@ -76,14 +76,15 @@ class FrozenTrajectory:
             rewards.append(transition.reward)
             next_states.append(transition.next_state)
 
-        states = pt.concat(states)
+        states = pt.stack(states)
         actions = pt.concat(actions) if pt.is_tensor(trajectory[0].action) else pt.Tensor(actions)
+        actions = actions.type(pt.int)
         rewards = pt.concat(rewards) if pt.is_tensor(trajectory[0].reward) else pt.Tensor(rewards)
         if pt.is_tensor(trajectory[0].next_state):
             if pt.is_tensor(trajectory[-1].next_state):
-                next_states = pt.concat(next_states)
+                next_states = pt.stack(next_states)
             else:
-                next_states = pt.concat(next_states[:-1])
+                next_states = pt.stack(next_states[:-1])
 
         return cls(states, actions, rewards, next_states)
 
@@ -93,15 +94,16 @@ class FrozenTrajectory:
         assert n, "Cannot instantiate a FrozenTrajectory from an empty list of transitions"
         _, action, reward, next_state = trajectory[0]
         states, actions, rewards, next_states = zip(*trajectory)
-        states = pt.concat(states)
+        states = pt.stack(states)
         actions = pt.concat(actions) if pt.is_tensor(action) else pt.Tensor(actions)
+        actions = actions.type(pt.int)
         rewards = pt.concat(rewards) if pt.is_tensor(reward) else pt.Tensor(rewards)
         _, _, _, last_next_state = trajectory[-1]
         if pt.is_tensor(next_state):
             if pt.is_tensor(last_next_state):
-                next_states = pt.concat(next_states)
+                next_states = pt.stack(next_states)
             else:
-                next_states = pt.concat(next_states[:-1])
+                next_states = pt.stack(next_states[:-1])
 
         return cls(states, actions, rewards, next_states)
 
@@ -124,7 +126,7 @@ class FrozenTrajectory:
         return self.__next_states.view(self.__next_states.shape)
 
     def __len__(self):
-        return self.n
+        return self.__n
 
     def __add__(self, _):
         raise NotImplementedError('Cannot modify a frozen Trajectory')
@@ -138,7 +140,7 @@ class FrozenTrajectory:
     def __getitem__(self, item: int | slice):
         if isinstance(item, int):
             if item < 0:
-                item += self.n
+                item += self.__n
             return self.__transition(item)
         elif isinstance(item, slice):
             # return [self.__transition(i) for i in range(self.n)[item]]
@@ -147,15 +149,15 @@ class FrozenTrajectory:
             raise TypeError(f"{item} cannot be used to index a Trajectory")
 
     def __iter__(self):
-        return [self.__transition(i) for i in range(self.n)]
+        return [self.__transition(i) for i in range(self.__n)]
 
     def __transition(self, i: int) -> t.SoftSARS:
-        if 0 > i or i >= self.n:
+        if 0 > i or i >= self.__n:
             raise IndexError(f"Trajectory index {i} is out of bounds for size {self.n}")
 
         state = self.__states[i]
-        action = self.__actions[i].item if len(self.__actions.shape) == 1 else self.__actions[i]
-        reward = self.__rewards[i].item if len(self.__rewards.shape) == 1 else self.__rewards[i]
+        action = self.__actions[i].item() if len(self.__actions.shape) == 1 else self.__actions[i]
+        reward = self.__rewards[i].item() if len(self.__rewards.shape) == 1 else self.__rewards[i]
         if self.__next_states is None or i >= self.__next_states.shape[0]:  # The last transition may lack a next state
             next_state = None
         else:
