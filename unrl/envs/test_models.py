@@ -16,8 +16,9 @@ import torch.nn.functional as F
 
 import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
-from unrl.algos.policy_gradient import ActorCritic, Policy, EligibilityTraceActorCritic
+from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic
 from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
+from unrl.algos.policy_gradient import Policy, Reinforce, BaselineReinforce
 
 
 class ExamplePolicy(Policy):
@@ -44,8 +45,7 @@ class ExampleStateValueModel(pt.nn.Module):
     def forward(self, state: pt.Tensor) -> pt.Tensor:
         x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
-        estimate = -F.relu(self.layer3(x))
-        return estimate
+        return self.layer3(x)
 
 
 class ExampleActionValueEstimator(pt.nn.Module):
@@ -58,7 +58,25 @@ class ExampleActionValueEstimator(pt.nn.Module):
     def forward(self, state: pt.Tensor) -> pt.Tensor:
         x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
-        return -F.relu(self.layer3(x))
+        return self.layer3(x)
+
+
+def prepare_game_model_reinforce(num_state_dims: int, num_actions: int, baseline: bool = False) -> Reinforce:
+    discount_factor = 0.9
+    learning_rate_policy = 1e-4
+    learning_rate_values = 1e-4
+    hidden_dim_policy = 150
+    hidden_dim_values = 180
+    policy = ExamplePolicy(num_state_dims, num_actions, hidden_dim_policy)
+    if baseline:
+        state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
+        reinforce = BaselineReinforce(policy, state_value_model,
+                                      discount_factor=discount_factor,
+                                      learning_rate_policy=learning_rate_policy,
+                                      learning_rate_values=learning_rate_values)
+    else:
+        reinforce = Reinforce(policy, discount_factor=discount_factor, learning_rate=learning_rate_policy)
+    return reinforce
 
 
 def prepare_game_model_actorcritic(num_state_dims: int,
@@ -97,7 +115,7 @@ def prepare_game_model_actorcritic(num_state_dims: int,
 
 def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t.Optional[int] = None, priority: bool = False, double: bool = False) -> DQN:
     discount_factor = 0.99
-    learning_rate = 1e-4
+    learning_rate = 1e-2
     epsilon_greedy = 0.1
     refresh_steps = 1000
     hidden_dim = 60

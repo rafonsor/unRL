@@ -17,7 +17,7 @@ import gymnasium as gym
 import torch as pt
 
 import unrl.types as t
-from unrl.containers import Trajectory
+from unrl.containers import Trajectory, Transition, FrozenTrajectory
 
 logger = logging.getLogger(__name__)
 
@@ -34,27 +34,30 @@ def make_blackjack(human: bool = False) -> t.Tuple[gym.Env, int, int, t.Callable
     return env, num_state_dims, num_actions, transform
 
 
-def run_episode(env: gym.Env, transform: t.Callable[[t.Tuple[int]], pt.Tensor]) -> t.Tuple[Trajectory, float]:
+def run_episode(env: gym.Env, transform: t.Callable[[t.Tuple[int]], pt.Tensor], random_play: bool = False) -> t.Tuple[Trajectory, float]:
     observation, _ = env.reset()
     state = transform(observation)
     terminated = truncated = False
-    info = None
+    episode = []
     i = 0
 
-    gen = model.online_optimise(state)
-    while (action := gen.send(info)) is not None and (i := i+1):
-        logger.debug(f'Step {i}: Applying action {action.item()} in state {state}')
-        observation, reward, terminated, truncated, _ = env.step(action.item())
-        state = transform(observation)
-        info = (reward, state, terminated, terminated | truncated)
+    while not (terminated | truncated):
+        if random_play:
+            action = env.action_space.sample()
+        else:
+            action = model.sample(state)
+        logger.debug(f'Step {i}: Applying action {action} in state {state}')
+        observation, reward, terminated, truncated, _ = env.step(action)
+        next_state = transform(observation)
+        episode.append(Transition(state, action, reward, next_state))
         if env.render_mode == 'human':
             from time import sleep
-            sleep(0.5)
+            sleep(0.25)
 
-    (episode, loss) = gen.value
+    loss = model.optimise(FrozenTrajectory.from_trajectory(episode))
 
     if terminated:
-        final_reward = info[0]
+        final_reward = episode[-1].reward
         if final_reward == 1:
             logger.info(f'Won the game after {len(episode)} steps.')
         elif final_reward == 0:
@@ -74,22 +77,22 @@ if __name__ == '__main__':
 
     from matplotlib import pyplot as plt
 
-    from unrl.envs.test_models import prepare_game_model_actorcritic
+    from unrl.envs.test_models import prepare_game_model_reinforce
 
     logging.basicConfig(level=logging.INFO)
     logger.setLevel(logging.DEBUG)
 
     env, num_state_dims, num_actions, obs_to_state = make_blackjack(human=False)
-    model = prepare_game_model_actorcritic(num_state_dims, num_actions, eligibility_traces=True)
+    model = prepare_game_model_reinforce(num_state_dims, num_actions, baseline=True)
 
-    num_episodes = 5000
+    num_episodes = 250
     logger.info(f'Playing Blackjack for {num_episodes} episodes')
 
     rewards = []
     losses = []
     for ep in range(num_episodes):
         logger.debug("starting new episode")
-        (episode, loss) = run_episode(env, obs_to_state)
+        (episode, loss) = run_episode(env, obs_to_state, not len(losses))
         rewards.append(episode[-1].reward)
         losses.append(loss)
         if (ep+1) % 50 == 0:
@@ -101,10 +104,14 @@ if __name__ == '__main__':
     plt.xlabel('Episode #')
     plt.ylim([-num_episodes, num_episodes])
     axy = plt.twinx()
-    axy.plot(pt.Tensor(losses).cumsum(0)/pt.range(1, num_episodes), c='r')
+    axy.plot(pt.Tensor(losses).cumsum(0)/pt.arange(1, num_episodes+1), c='r')
     axy.scatter(range(num_episodes), losses, c='r', s=3)
     axy.set_ylabel('Average episode loss')
     plt.tight_layout()
+
+    if not hasattr(model, 'state_value_model'):
+        plt.show()
+        exit(0)
 
     def plot_learnt_state_values(estimates: pt.Tensor, ace: bool):
         variant = f'{"" if ace else "No "}Usable Ace'
