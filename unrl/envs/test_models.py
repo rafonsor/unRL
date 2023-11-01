@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
-from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic
+from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic, AdvantageActorCritic
 from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
 from unrl.algos.policy_gradient import Policy, Reinforce, BaselineReinforce
 
@@ -81,6 +81,7 @@ def prepare_game_model_reinforce(num_state_dims: int, num_actions: int, baseline
 
 def prepare_game_model_actorcritic(num_state_dims: int,
                                    num_actions: int,
+                                   advantage: bool = False,
                                    eligibility_traces: bool = False
                                    ) -> ActorCritic:
     discount_factor = 0.9
@@ -95,7 +96,14 @@ def prepare_game_model_actorcritic(num_state_dims: int,
     policy = ExamplePolicy(num_state_dims, num_actions, hidden_dim_policy)
     state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
     action_sampler = make_sampler(ActionSamplingMode.EPSILON_GREEDY)
-    if eligibility_traces:
+    if advantage:
+        actor_critic = AdvantageActorCritic(
+            policy, state_value_model,
+            discount_factor=discount_factor,
+            learning_rate_policy=learning_rate_policy,
+            learning_rate_values=learning_rate_values,
+            action_sampler=action_sampler)
+    elif eligibility_traces:
         actor_critic = EligibilityTraceActorCritic(
             policy, state_value_model,
             discount_factor=discount_factor,

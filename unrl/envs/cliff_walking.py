@@ -71,7 +71,7 @@ if __name__ == '__main__':
     logger.setLevel(logging.DEBUG)
 
     env, num_state_dims, num_actions, obs_to_state = make_cliff_walking(human=False)
-    model = prepare_game_model_actorcritic(num_state_dims, num_actions, eligibility_traces=False)
+    model = prepare_game_model_actorcritic(num_state_dims, num_actions, advantage=True, eligibility_traces=False)
 
     num_episodes = 100
     logger.info(f'Playing CliffWalking for {num_episodes} episodes')

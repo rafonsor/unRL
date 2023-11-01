@@ -17,7 +17,7 @@ import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
 from unrl.algos.dqn import onestep_td_error
 from unrl.algos.policy_gradient import Policy
-from unrl.containers import Transition, Trajectory
+from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
 from unrl.optim import EligibilityTraceOptimizer
 from unrl.utils import persisted_generator_value
 
@@ -213,3 +213,142 @@ class EligibilityTraceActorCritic:
         self._optim_values.episode_reset()
 
         return episode, total_loss / len(episode)
+
+
+class AdvantageActorCritic:
+    """Advantage Actor-Critic (A2C) for episodic settings. This is the synchronous variant of the Asynchronous Advantage
+    Actor-Critic (A3C) model proposed in [1]_. Advantage Actor-Critic algorithms update policies using estimates of the
+    Advantage from state-values learnt by the critic.
+
+    References:
+        [1] Mnih, V., Badia, A. P., Mirza, M., & et al. (2016). "Asynchronous methods for deep reinforcement learning".
+            In Proceedings of The 33rd International Conference on Machine Learning.
+    """
+    policy: Policy
+    state_value_model: pt.nn.Module
+    sampler: ActionSampler  # Strategy for sampling actions from the policy
+
+    def __init__(self,
+                 policy: Policy,
+                 state_value_model: pt.nn.Module,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 discount_factor: float,
+                 action_sampler: t.Optional[ActionSampler] = None):
+        """Args:
+            policy: Policy model to improve
+            state_value_model: State-value model to improve
+            learning_rate_policy: learning rate for Policy model
+            learning_rate_values: learning rate for state-value model
+            discount_factor: discounting rate for future rewards
+            action_sampler: (Optional) strategy for sampling actions from the policy. Defaults to Greedy sampling if not
+                            provided.
+        """
+        self.policy = policy
+        self.state_value_model = state_value_model
+        self.discount_factor = discount_factor
+        self.learning_rate = learning_rate_policy
+        self.learning_rate_values = learning_rate_values
+        self._sampler = action_sampler or make_sampler(ActionSamplingMode.EPSILON_GREEDY)
+        self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=self.learning_rate)
+        self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
+
+    def _step_optimisers(self, loss: pt.Tensor):
+        self._optim_policy.zero_grad()
+        self._optim_values.zero_grad()
+        loss.backward()
+        self._optim_policy.step()
+        self._optim_values.step()
+
+    def sample(self, state: pt.Tensor) -> int:
+        logprobs = self.policy(state)
+        action = self._sampler.sample(logprobs)
+        return action.item()
+
+    def optimise(self, episode: ContextualTrajectory) -> float:
+        total_loss = None
+        R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
+        for transition in episode[::-1]:
+            (state, action, reward, next_state, _) = transition
+            R = reward + self.discount_factor * R
+            logprobs = self.policy(state)
+
+            estimate = self.state_value_model(state)
+            advantage = (R - estimate)
+            loss_policy = logprobs[action] * advantage
+            loss_values = (advantage ** 2).mean()
+
+            loss = loss_policy + loss_values
+            if total_loss is None:
+                total_loss = loss
+            else:
+                total_loss += loss
+
+        self._step_optimisers(total_loss)
+        return total_loss.item()
+
+    def batch_optimise(self, episodes: t.Sequence[FrozenTrajectory]):
+        for episode in episodes:
+            self.optimise(episode)
+
+    @persisted_generator_value
+    def online_optimise(
+        self,
+        starting_state: pt.Tensor,
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
+        """Optimise policy and state-value function online for one episode.
+
+        Args:
+            starting_state:
+                State from which to begin the episode.
+
+        Yields:
+            Action chosen by policy for the current state.
+
+        Receives:
+            Tuple (reward, successor, terminal, stop) containing the reward obtained by applying the action yielded, the
+            resulting successor state, and whether this state is terminal. And, finally, an indication of whether to
+            stop irrespective of the ending up in a terminal state.
+
+        Returns:
+            A tuple (trajectory, average_loss) containing the trajectory of the full episode and the average TD-error.
+        """
+        episode = []
+        logits = []
+        state = starting_state
+        stop = False
+
+        # Run episode
+        while not stop:
+            logprobs = self.policy(state)
+            action = self._sampler.sample(logprobs)
+            logits.append(logprobs[action])
+            # Share action
+            reward, next_state, terminal, stop = yield action
+            # Save transition
+            episode.append(ContextualTransition(state, action.type(pt.int), reward, next_state, terminal))
+            state = next_state
+
+        # Accumulate gradients
+        R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
+        total_loss = None
+        for transition, logit in zip(episode[::-1], logits):
+            R = transition.reward + self.discount_factor * R
+            estimate = self.state_value_model(transition.state)
+            advantage = R - estimate
+            # Compute losses
+            loss_policy = -logit * advantage
+            loss_values = (advantage ** 2).mean()
+            loss = loss_values + loss_policy
+            if total_loss is None:
+                total_loss = loss
+            else:
+                total_loss += loss
+
+        # Apply updates
+        self._step_optimisers(total_loss)
+        del logits
+        return episode, total_loss.item()
+
+
+A2C = AdvantageActorCritic
