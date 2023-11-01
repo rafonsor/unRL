@@ -93,6 +93,7 @@ def prepare_game_model_actorcritic(num_state_dims: int,
     hidden_dim_values = 30
     weight_decay_policy = 0.1
     weight_decay_values = 0.1
+    entropy_coefficient = 0.2
     policy = ExamplePolicy(num_state_dims, num_actions, hidden_dim_policy)
     state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
     action_sampler = make_sampler(ActionSamplingMode.EPSILON_GREEDY)
@@ -102,6 +103,7 @@ def prepare_game_model_actorcritic(num_state_dims: int,
             discount_factor=discount_factor,
             learning_rate_policy=learning_rate_policy,
             learning_rate_values=learning_rate_values,
+            entropy_coefficient=entropy_coefficient,
             action_sampler=action_sampler)
     elif eligibility_traces:
         actor_critic = EligibilityTraceActorCritic(

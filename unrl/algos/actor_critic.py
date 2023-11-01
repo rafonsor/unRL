@@ -17,6 +17,7 @@ import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
 from unrl.algos.dqn import onestep_td_error
 from unrl.algos.policy_gradient import Policy
+from unrl.config import validate_config
 from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
 from unrl.optim import EligibilityTraceOptimizer
 from unrl.utils import persisted_generator_value
@@ -234,6 +235,7 @@ class AdvantageActorCritic:
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  discount_factor: float,
+                 entropy_coefficient: t.Optional[float] = None,
                  action_sampler: t.Optional[ActionSampler] = None):
         """Args:
             policy: Policy model to improve
@@ -241,14 +243,21 @@ class AdvantageActorCritic:
             learning_rate_policy: learning rate for Policy model
             learning_rate_values: learning rate for state-value model
             discount_factor: discounting rate for future rewards
+            entropy_coefficient: (Optional) Coefficient for adding entropy regularisation. Disabled if not specified.
             action_sampler: (Optional) strategy for sampling actions from the policy. Defaults to Greedy sampling if not
                             provided.
         """
+        validate_config(learning_rate_policy, "learning_rate_policy", "unitpositive")
+        validate_config(learning_rate_values, "learning_rate_values", "unitpositive")
+        validate_config(discount_factor, "discount_factor", "unitpositive")
+        if entropy_coefficient is not None:
+            validate_config(entropy_coefficient, "entropy_coefficient", "unit")
         self.policy = policy
         self.state_value_model = state_value_model
         self.discount_factor = discount_factor
         self.learning_rate = learning_rate_policy
         self.learning_rate_values = learning_rate_values
+        self.entropy_coefficient = entropy_coefficient
         self._sampler = action_sampler or make_sampler(ActionSamplingMode.EPSILON_GREEDY)
         self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=self.learning_rate)
         self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
@@ -267,11 +276,19 @@ class AdvantageActorCritic:
 
     def optimise(self, episode: ContextualTrajectory) -> float:
         total_loss = None
+        entropy_reg = None
         R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
         for transition in episode[::-1]:
             (state, action, reward, next_state, _) = transition
             R = reward + self.discount_factor * R
             logprobs = self.policy(state)
+
+            if self.entropy_coefficient:
+                entropy = (-logprobs.exp() * logprobs).sum()
+                if entropy_reg is None:
+                    entropy_reg = entropy
+                else:
+                    entropy_reg += entropy
 
             estimate = self.state_value_model(state)
             advantage = (R - estimate)
@@ -284,6 +301,8 @@ class AdvantageActorCritic:
             else:
                 total_loss += loss
 
+        if self.entropy_coefficient:
+            total_loss += self.entropy_coefficient * entropy_reg / len(episode)
         self._step_optimisers(total_loss)
         return total_loss.item()
 
@@ -315,6 +334,7 @@ class AdvantageActorCritic:
         """
         episode = []
         logits = []
+        entropy_reg = None
         state = starting_state
         stop = False
 
@@ -328,6 +348,13 @@ class AdvantageActorCritic:
             # Save transition
             episode.append(ContextualTransition(state, action.type(pt.int), reward, next_state, terminal))
             state = next_state
+
+            if self.entropy_coefficient:
+                entropy = (-logprobs.exp() * logprobs).sum()
+                if entropy_reg is None:
+                    entropy_reg = entropy
+                else:
+                    entropy_reg += entropy
 
         # Accumulate gradients
         R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
@@ -344,6 +371,9 @@ class AdvantageActorCritic:
                 total_loss = loss
             else:
                 total_loss += loss
+
+        if self.entropy_coefficient:
+            total_loss += self.entropy_coefficient * entropy_loss / len(episode)
 
         # Apply updates
         self._step_optimisers(total_loss)
