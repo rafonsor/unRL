@@ -14,6 +14,8 @@
 import math
 import random
 
+import torch as pt
+
 import unrl.types as t
 
 
@@ -50,3 +52,13 @@ def sample_gaussian(mu: float, sigma: float) -> float:
     u1, u2 = random.random(), random.random()
     z = math.sqrt(-2*math.log(u1)) * math.cos(2*math.pi*u2)
     return mu + z*sigma
+
+
+def entropy(dist: t.Optional[pt.Tensor] = None, logits: t.Optional[pt.Tensor] = None) -> t.FloatLike:
+    """Compute Entropy H for a probability distribution, either from probabilities or log-probabilities"""
+    if dist is not None:
+        dist /= dist.sum()
+        return (-dist * dist.log()).sum()
+    if logits is not None:
+        return (-logits.exp() * logits).sum()
+    return pt.Tensor([0])

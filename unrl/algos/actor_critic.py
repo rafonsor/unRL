@@ -17,10 +17,11 @@ import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
 from unrl.algos.dqn import onestep_td_error
 from unrl.algos.policy_gradient import Policy
+from unrl.basic import entropy
 from unrl.config import validate_config
 from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
 from unrl.optim import EligibilityTraceOptimizer
-from unrl.utils import persisted_generator_value
+from unrl.utils import persisted_generator_value, multi_optimiser_stepper
 
 
 class ActorCritic:
@@ -261,13 +262,7 @@ class AdvantageActorCritic:
         self._sampler = action_sampler or make_sampler(ActionSamplingMode.EPSILON_GREEDY)
         self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=self.learning_rate)
         self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
-
-    def _step_optimisers(self, loss: pt.Tensor):
-        self._optim_policy.zero_grad()
-        self._optim_values.zero_grad()
-        loss.backward()
-        self._optim_policy.step()
-        self._optim_values.step()
+        self._stepper = multi_optimiser_stepper(self._optim_policy, self._optim_values)
 
     def sample(self, state: pt.Tensor) -> int:
         logprobs = self.policy(state)
@@ -275,8 +270,8 @@ class AdvantageActorCritic:
         return action.item()
 
     def optimise(self, episode: ContextualTrajectory) -> float:
-        total_loss = None
-        entropy_reg = None
+        total_loss = 0
+        entropy_reg = 0
         R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
         for transition in episode[::-1]:
             (state, action, reward, next_state, _) = transition
@@ -284,26 +279,17 @@ class AdvantageActorCritic:
             logprobs = self.policy(state)
 
             if self.entropy_coefficient:
-                entropy = (-logprobs.exp() * logprobs).sum()
-                if entropy_reg is None:
-                    entropy_reg = entropy
-                else:
-                    entropy_reg += entropy
+                entropy_reg += entropy(logits=logprobs)
 
             estimate = self.state_value_model(state)
             advantage = (R - estimate)
             loss_policy = logprobs[action] * advantage
             loss_values = (advantage ** 2).mean()
-
-            loss = loss_policy + loss_values
-            if total_loss is None:
-                total_loss = loss
-            else:
-                total_loss += loss
+            total_loss += loss_policy + loss_values
 
         if self.entropy_coefficient:
             total_loss += self.entropy_coefficient * entropy_reg / len(episode)
-        self._step_optimisers(total_loss)
+        self._stepper(total_loss)
         return total_loss.item()
 
     def batch_optimise(self, episodes: t.Sequence[FrozenTrajectory]):
@@ -350,15 +336,15 @@ class AdvantageActorCritic:
             state = next_state
 
             if self.entropy_coefficient:
-                entropy = (-logprobs.exp() * logprobs).sum()
+                H = entropy(logits=logprobs)
                 if entropy_reg is None:
-                    entropy_reg = entropy
+                    entropy_reg = H
                 else:
-                    entropy_reg += entropy
+                    entropy_reg += H
 
         # Accumulate gradients
         R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
-        total_loss = None
+        total_loss = 0
         for transition, logit in zip(episode[::-1], logits):
             R = transition.reward + self.discount_factor * R
             estimate = self.state_value_model(transition.state)
@@ -366,17 +352,13 @@ class AdvantageActorCritic:
             # Compute losses
             loss_policy = -logit * advantage
             loss_values = (advantage ** 2).mean()
-            loss = loss_values + loss_policy
-            if total_loss is None:
-                total_loss = loss
-            else:
-                total_loss += loss
+            total_loss += loss_values + loss_policy
 
         if self.entropy_coefficient:
             total_loss += self.entropy_coefficient * entropy_reg / len(episode)
 
         # Apply updates
-        self._step_optimisers(total_loss)
+        self._stepper(total_loss)
         del logits
         return episode, total_loss.item()
 

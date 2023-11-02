@@ -19,7 +19,9 @@ import torch as pt
 import unrl.types as t
 from unrl.action_sampling import make_sampler, ActionSamplingMode
 from unrl.algos.dqn import onestep_td_error
+from unrl.basic import entropy
 from unrl.containers import FrozenTrajectory
+from unrl.utils import multi_optimiser_stepper
 
 
 class GradientAccumulationMode(Enum):
@@ -143,15 +145,15 @@ class SimplifiedPPO(Reinforce):
         self.learning_rate_values = learning_rate_values
         self.epsilon = epsilon
         self.target_refresh_steps = target_refresh_steps
-        self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
         self.target_policy = deepcopy(self.policy)
+        self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
+        self._stepper = multi_optimiser_stepper(self._optim, self._optim_values)
         self.__steps = 0
 
     def optimise(self, episode: FrozenTrajectory) -> float:
         total_loss = 0
-        for offset in range(len(episode)):
-            timestep = len(episode) - 1 - offset
-            (state, action, reward, next_state, terminal) = episode[timestep]
+        for transition in episode:
+            (state, action, reward, next_state, terminal) = transition
 
             estimate = self.state_value_model(state)
             next_state_estimate = self.state_value_model(next_state)
@@ -161,20 +163,99 @@ class SimplifiedPPO(Reinforce):
             advantage = onestep_td_error(self.discount_factor, estimate, reward, next_state_estimate, terminal)
             rho = logprobs[action] / logprobs_b[action]
 
-            loss_values = advantage ** 2
-            # Note: minimisation coupled with clipping ensures lower bounding of loss when advantage is negative
+            # Note: minimisation coupled with clipping ensures loss is lower bounded when Advantage is negative
             loss_policy = -min(rho * advantage, pt.clip(rho, 1 - self.epsilon, 1 + self.epsilon) * advantage)
-            loss = loss_values + loss_policy
+            loss_values = advantage ** 2
+            loss = loss_policy - loss_values
             total_loss += loss.item()
 
-            self._optim_values.zero_grad()
-            self._optim.zero_grad()
-            loss.backward()
-            self._optim_values.step()
-            self._optim.step()
+        self._stepper(total_loss)
 
-            self.__steps += 1
-            if self.__steps % self.target_refresh_steps == 0:
-                self.target_policy.load_state_dict(self.policy.state_dict())
-                self.__steps = 0
+        self.__steps += 1
+        if self.__steps % self.target_refresh_steps == 0:
+            self.target_policy.load_state_dict(self.policy.state_dict())
+            self.__steps = 0
+        return total_loss / len(episode)
+
+
+class PPO(Reinforce):
+    """Proximal Policy Optimisation (PPO) algorithm proposed by [1]_. Policy loss is constructed from unbiased n-step
+    Advantage estimates and clipped within a bounded region determined by `epsilon`. To debias estimates PPO relies on a
+    dual behaviour-target policies like Actor-Critic methods.
+
+    References:
+        [1] Schulman, J., Wolski, F., Dhariwal, P., & et al. (2017). "Proximal policy optimization algorithms".
+            arXiv:1707.06347.
+    """
+    policy: Policy
+    behaviour_policy: Policy
+    state_value_model: pt.nn.Module
+
+    def __init__(self,
+                 policy: Policy,
+                 state_value_model: pt.nn.Module,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 discount_factor: float,
+                 lambda_factor: float,
+                 epsilon: float,
+                 target_refresh_steps: int,
+                 value_loss_coefficient: float,
+                 entropy_loss_coefficient: float):
+        super().__init__(policy, learning_rate_policy, discount_factor)
+        self.state_value_model = state_value_model
+        self.learning_rate_values = learning_rate_values
+        self.lam = lambda_factor
+        self.epsilon = epsilon
+        self.target_refresh_steps = target_refresh_steps
+        self.value_loss_coefficient = value_loss_coefficient
+        self.entropy_loss_coefficient = entropy_loss_coefficient
+
+        self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
+        self._stepper = multi_optimiser_stepper(self._optim, self._optim_values)
+        self.target_policy = deepcopy(self.policy)
+        self.__steps = 0
+
+    def optimise(self, episode: FrozenTrajectory) -> float:
+        # Compute One-step Advantages for all transitions, these are later composed with variable discounting.
+        advantages = []
+        for transition in episode:
+            (state, _, reward, next_state, terminal) = transition
+            estimate = self.state_value_model(state)
+            next_state_estimate = self.state_value_model(next_state)
+            advantages.append(onestep_td_error(self.discount_factor, estimate, reward, next_state_estimate, terminal))
+
+        advantages = pt.Stack(advantages)
+        discounts = pt.cumprod(pt.arange(0, len(episode)) * self.lam * self.discount_factor, dim=-1)
+        offset = 0
+
+        # Compute and aggregate surrogate losses
+        total_loss = 0
+        for timestep, transition in enumerate(episode):
+            (state, action, _, _, _) = transition
+            logprobs = self.target_policy(state)
+            logprobs_b = self.policy(state)
+
+            # Importance sampling weight
+            rho = logprobs[action] / logprobs_b[action]
+
+            # n-step Advantage estimate
+            nae = advantages[timestep:] * discounts[:-offset]
+            offset += 1
+
+            # Note: minimisation is coupled with clipping to ensure policy loss is lower bounded when Advantage is
+            # negative (see fig.1 [1]_).
+            loss_policy = -min(rho * nae, pt.clip(rho, 1 - self.epsilon, 1 + self.epsilon) * nae)
+            loss_values = self.value_loss_coefficient * (advantages[timestep] ** 2)
+            loss_entropy = self.entropy_loss_coefficient * entropy(logits=logprobs)
+            # Note: In [1]_ eq.9 the state-value function loss is subtracted only because authors decided to invert the
+            # signs of the one-step Advantage equation.
+            total_loss += loss_policy + loss_values + loss_entropy
+
+        self._stepper(total_loss)
+
+        self.__steps += 1
+        if self.__steps % self.target_refresh_steps == 0:
+            self.target_policy.load_state_dict(self.policy.state_dict())
+            self.__steps = 0
         return total_loss / len(episode)

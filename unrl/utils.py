@@ -12,11 +12,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 from contextlib import contextmanager
+from functools import wraps
 from threading import Lock
 
-import unrl.types as t
+import torch as pt
 
-from functools import wraps
+import unrl.types as t
 
 
 def persisted_generator_value(fn: t.Callable[..., t.Generator[..., ..., t.Any]]) -> t.Callable:
@@ -50,3 +51,20 @@ def optional_lock(mutex: t.Optional[Lock]):
             yield
     else:
         yield
+
+
+def multi_optimiser_stepper(*optimisers: pt.optim.Optimizer) -> t.Callable[[pt.Tensor, ...], None]:
+    """Helper function to one-click backprogate and update parameters for multiple models sharing a common loss value"""
+    def stepper(loss: pt.Tensor, **backward_kwargs) -> None:
+        """Backpropagate loss tensor and update parameters using all injected optimisers.
+
+        Args:
+            loss: loss tensor used to generate gradients.
+            **backward_kwargs: optional keyword arguments to pass to `.backward`.
+        """
+        for optim in optimisers:
+            optim.zero_grad()
+        loss.backward(**backward_kwargs)
+        for optim in optimisers:
+            optim.step()
+    return stepper
