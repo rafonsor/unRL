@@ -11,12 +11,14 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from copy import deepcopy
 from enum import Enum
 
 import torch as pt
 
 import unrl.types as t
 from unrl.action_sampling import make_sampler, ActionSamplingMode
+from unrl.algos.dqn import onestep_td_error
 from unrl.containers import FrozenTrajectory
 
 
@@ -111,4 +113,68 @@ class BaselineReinforce(Reinforce):
             loss.backward()
             self._optim_values.step()
             self._optim.step()
+        return total_loss / len(episode)
+
+
+class SimplifiedPPO(Reinforce):
+    """Simplified variant of Proximal Policy Optimisation ([1]_) based on pseudocode of [2]_ which does not make use of
+    n-step returns.
+
+    References:
+        [1] Schulman, J., Wolski, F., Dhariwal, P., & et al. (2017). "Proximal policy optimization algorithms".
+            arXiv:1707.06347.
+        [2] Albrecht S. V., Christianos F. & Schäfer L. (2024). Section 8.2.6., Multi-Agent Reinforcement Learning:
+            Foundations and Modern Approaches. Pre-print.
+    """
+    policy: Policy
+    behaviour_policy: Policy
+    state_value_model: pt.nn.Module
+
+    def __init__(self,
+                 policy: Policy,
+                 state_value_model: pt.nn.Module,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 discount_factor: float,
+                 epsilon: float,
+                 target_refresh_steps: int):
+        super().__init__(policy, learning_rate_policy, discount_factor)
+        self.state_value_model = state_value_model
+        self.learning_rate_values = learning_rate_values
+        self.epsilon = epsilon
+        self.target_refresh_steps = target_refresh_steps
+        self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
+        self.target_policy = deepcopy(self.policy)
+        self.__steps = 0
+
+    def optimise(self, episode: FrozenTrajectory) -> float:
+        total_loss = 0
+        for offset in range(len(episode)):
+            timestep = len(episode) - 1 - offset
+            (state, action, reward, next_state, terminal) = episode[timestep]
+
+            estimate = self.state_value_model(state)
+            next_state_estimate = self.state_value_model(next_state)
+            logprobs = self.target_policy(state)
+            logprobs_b = self.policy(state)
+
+            advantage = onestep_td_error(self.discount_factor, estimate, reward, next_state_estimate, terminal)
+            rho = logprobs[action] / logprobs_b[action]
+
+            loss_values = advantage ** 2
+            # Note: minimisation coupled with clipping ensures lower bounding of loss when advantage is negative
+            loss_policy = -min(rho * advantage, pt.clip(rho, 1 - self.epsilon, 1 + self.epsilon) * advantage)
+            loss = loss_values + loss_policy
+            total_loss += loss.item()
+
+            self._optim_values.zero_grad()
+            self._optim.zero_grad()
+            loss.backward()
+            self._optim_values.step()
+            self._optim.step()
+
+            self.__steps += 1
+            if self.__steps % self.target_refresh_steps == 0:
+                self.target_policy.load_state_dict(self.policy.state_dict())
+                self.__steps = 0
         return total_loss / len(episode)
