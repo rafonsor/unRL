@@ -373,7 +373,7 @@ class AdvantageActorCritic:
                 total_loss += loss
 
         if self.entropy_coefficient:
-            total_loss += self.entropy_coefficient * entropy_loss / len(episode)
+            total_loss += self.entropy_coefficient * entropy_reg / len(episode)
 
         # Apply updates
         self._step_optimisers(total_loss)
