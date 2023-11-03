@@ -18,7 +18,7 @@ import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic, AdvantageActorCritic
 from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
-from unrl.algos.policy_gradient import Policy, Reinforce, BaselineReinforce
+from unrl.algos.policy_gradient import Policy, Reinforce, BaselineReinforce, DDPG, ContinuousPolicy
 
 
 class ExamplePolicy(Policy):
@@ -33,6 +33,19 @@ class ExamplePolicy(Policy):
         x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
         return self.logsm(self.layer3(x))
+
+
+class ExampleContinuousPolicy(ContinuousPolicy):
+    def __init__(self, num_state_dims: int, num_action_dims: int, hidden_dim: int):
+        super().__init__()
+        self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
+        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
+        self.layer3 = pt.nn.Linear(hidden_dim, num_action_dims)
+
+    def forward(self, state: pt.Tensor) -> pt.Tensor:
+        x = F.relu(self.layer1(state))
+        x = F.relu(self.layer2(x))
+        return self.layer3(x)
 
 
 class ExampleStateValueModel(pt.nn.Module):
@@ -58,6 +71,21 @@ class ExampleActionValueEstimator(pt.nn.Module):
     def forward(self, state: pt.Tensor) -> pt.Tensor:
         x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
+        return self.layer3(x)
+
+
+class ExampleContinuousActionValueEstimator(pt.nn.Module):
+    def __init__(self, num_state_dims: int, num_action_dims: int, hidden_dim: int):
+        super().__init__()
+        self.layer_state = pt.nn.Linear(num_state_dims, hidden_dim)
+        self.layer_action = pt.nn.Linear(num_action_dims, hidden_dim)
+        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
+        self.layer3 = pt.nn.Linear(hidden_dim, 1)
+
+    def forward(self, state: pt.Tensor, action: pt.Tensor) -> pt.Tensor:
+        x1 = F.relu(self.layer_state(state))
+        x2 = F.relu(self.layer_action(action))
+        x = F.relu(self.layer2(x1 + x2))
         return self.layer3(x)
 
 
@@ -163,3 +191,31 @@ def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t
     else:
         dqn = DQN
     return dqn(action_value_model, **model_kwargs)
+
+
+def prepare_game_model_ddpg(num_state_dims: int, num_action_dims: int) -> DDPG:
+    discount_factor = 0.9
+    learning_rate_policy = 1e-4
+    learning_rate_values = 1e-4
+    hidden_dim_policy = 150
+    hidden_dim_values = 180
+    replay_memory_capacity = 10000
+    replay_minibatch = 64
+    noise_scale = 1.0  # unit stddev
+    noise_exploration = 0.05
+    polyak_factor = 0.9
+    refresh_steps = 1000
+    policy = ExampleContinuousPolicy(num_state_dims, num_action_dims, hidden_dim_policy)
+    action_value_model = ExampleContinuousActionValueEstimator(num_state_dims, num_action_dims, hidden_dim_values)
+    ddpg = DDPG(
+        policy, action_value_model,
+        discount_factor=discount_factor,
+        learning_rate_policy=learning_rate_policy,
+        learning_rate_values=learning_rate_values,
+        noise_scale=noise_scale,
+        noise_exploration=noise_exploration,
+        polyak_factor=polyak_factor,
+        replay_memory_capacity=replay_memory_capacity,
+        batch_size=replay_minibatch,
+        target_refresh_steps=refresh_steps)
+    return ddpg

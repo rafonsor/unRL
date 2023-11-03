@@ -183,3 +183,37 @@ class EligibilityTraceOptimizer(pt.optim.Optimizer):
 
     def episode_reset(self):
         self.state.clear()  # defaultdict, will repopulate parameter keys on-the-fly
+
+
+def multi_optimiser_stepper(*optimisers: pt.optim.Optimizer) -> t.Callable[[pt.Tensor, ...], None]:
+    """Helper function to one-click backprogate and update parameters for multiple models sharing a common loss value"""
+    def stepper(loss: pt.Tensor, **backward_kwargs) -> None:
+        """Backpropagate loss tensor and update parameters using all injected optimisers.
+
+        Args:
+            loss: loss tensor used to generate gradients.
+            **backward_kwargs: optional keyword arguments to pass to `.backward`.
+        """
+        for optim in optimisers:
+            optim.zero_grad()
+        loss.backward(**backward_kwargs)
+        for optim in optimisers:
+            optim.step()
+    return stepper
+
+
+def polyak_averaging_inplace(models: t.Sequence[pt.nn.Module], weights: t.Sequence[float]):
+    """Inplace weighted averaging of model parameters
+
+    Args:
+        models: sequence of twin models from which to compute weighted averages. The parameters of the
+                first model (0th index) are modified inplace.
+        weights: importance of each model
+    """
+    assert models is not None and len(models) >= 2, 'Must provide at least two models'
+    assert weights is not None and len(models) == len(weights), "Inputs dimensions mismatch"
+
+    with pt.no_grad():
+        for ps in zip(*(m.parameters() for m in models)):
+            pmain = ps[0]
+            pmain.set_(sum(p*w for p, w in zip(ps, weights)))

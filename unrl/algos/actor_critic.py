@@ -20,8 +20,8 @@ from unrl.algos.policy_gradient import Policy
 from unrl.basic import entropy
 from unrl.config import validate_config
 from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
-from unrl.optim import EligibilityTraceOptimizer
-from unrl.utils import persisted_generator_value, multi_optimiser_stepper
+from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper
+from unrl.utils import persisted_generator_value
 
 
 class ActorCritic:
