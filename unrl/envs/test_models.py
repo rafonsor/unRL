@@ -18,7 +18,7 @@ import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic, AdvantageActorCritic
 from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
-from unrl.algos.policy_gradient import Policy, Reinforce, BaselineReinforce, DDPG, ContinuousPolicy
+from unrl.algos.policy_gradient import Policy, Reinforce, BaselineReinforce, DDPG, ContinuousPolicy, TwinDelayedDDPG
 
 
 class ExamplePolicy(Policy):
@@ -193,7 +193,7 @@ def prepare_game_model_dqn(num_state_dims: int, num_actions: int, buffer_size: t
     return dqn(action_value_model, **model_kwargs)
 
 
-def prepare_game_model_ddpg(num_state_dims: int, num_action_dims: int) -> DDPG:
+def prepare_game_model_ddpg(num_state_dims: int, num_action_dims: int, twin: bool = False) -> DDPG:
     discount_factor = 0.9
     learning_rate_policy = 1e-4
     learning_rate_values = 1e-4
@@ -201,21 +201,33 @@ def prepare_game_model_ddpg(num_state_dims: int, num_action_dims: int) -> DDPG:
     hidden_dim_values = 180
     replay_memory_capacity = 10000
     replay_minibatch = 64
-    noise_scale = 1.0  # unit stddev
+    noise_scale = 0.1
     noise_exploration = 0.05
+    noise_epsilon = 0.1
     polyak_factor = 0.9
     refresh_steps = 1000
+    policy_update_delay = 2
     policy = ExampleContinuousPolicy(num_state_dims, num_action_dims, hidden_dim_policy)
     action_value_model = ExampleContinuousActionValueEstimator(num_state_dims, num_action_dims, hidden_dim_values)
-    ddpg = DDPG(
-        policy, action_value_model,
-        discount_factor=discount_factor,
-        learning_rate_policy=learning_rate_policy,
-        learning_rate_values=learning_rate_values,
-        noise_scale=noise_scale,
-        noise_exploration=noise_exploration,
-        polyak_factor=polyak_factor,
-        replay_memory_capacity=replay_memory_capacity,
-        batch_size=replay_minibatch,
-        target_refresh_steps=refresh_steps)
+    model_kwargs = {
+        "discount_factor": discount_factor,
+        "learning_rate_policy": learning_rate_policy,
+        "learning_rate_values": learning_rate_values,
+        "noise_scale": noise_scale,
+        "noise_exploration": noise_exploration,
+        "polyak_factor": polyak_factor,
+        "replay_memory_capacity": replay_memory_capacity,
+        "batch_size": replay_minibatch,
+        "target_refresh_steps": refresh_steps
+    }
+    if twin:
+        action_value_twin_model = ExampleContinuousActionValueEstimator(num_state_dims, num_action_dims,
+                                                                        hidden_dim_values)
+        model_kwargs.update({
+            "noise_epsilon": noise_epsilon,
+            "policy_update_delay": policy_update_delay
+        })
+        ddpg = TwinDelayedDDPG(policy, action_value_model, action_value_twin_model, **model_kwargs)
+    else:
+        ddpg = DDPG(policy, action_value_model, **model_kwargs)
     return ddpg
