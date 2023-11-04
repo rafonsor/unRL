@@ -20,6 +20,7 @@ import torch as pt
 from torch.optim import SGD
 
 import unrl.types as t
+from unrl.basic import mse
 from unrl.config import validate_config
 from unrl.action_sampling import EpsilonGreedyActionSampler, GreedyActionSampler
 from unrl.containers import ContextualTransition, ContextualTrajectory
@@ -154,16 +155,11 @@ class DQN:
 
     def _step(self, td: t.FloatLike) -> float:
         """Compute MSE loss from One-step TD-error to backpropagate gradients and update the behaviour model."""
-        loss = self._compute_loss(td)
+        loss = mse(td)
         loss.backward()
         self._optim.step()
         self._optim.zero_grad()
         return loss.item()
-
-    @staticmethod
-    def _compute_loss(td: t.FloatLike) -> pt.Tensor:
-        """Compute MSE loss relative to One-step TD-error"""
-        return (td ** 2).mean()
 
 
 class _DQNExperienceReplayBase(DQN, metaclass=ABCMeta):

@@ -15,13 +15,15 @@ import gc
 from copy import deepcopy
 
 import torch as pt
+import torch.nn.functional as F
 
 import unrl.types as t
 from unrl.algos.dqn import onestep_td_error
+from unrl.basic import mse
 from unrl.config import validate_config
 from unrl.containers import ContextualTransition, ContextualTrajectory
 from unrl.experience_buffer import ExperienceBuffer
-from unrl.functions import ContinuousPolicy, StateValueFunction, ContinuousActionValueFunction
+from unrl.functions import ContinuousPolicy, StateValueFunction, ContinuousActionValueFunction, GaussianPolicy
 from unrl.optim import multi_optimiser_stepper, polyak_averaging_inplace
 from unrl.utils import persisted_generator_value
 
@@ -324,3 +326,168 @@ class TwinDelayedDDPG(DDPG):
                 gc.collect()
 
         return episode, total_loss / len(episode)
+
+
+class SAC:
+    """Soft Actor-Critic is an off-policy algorithm for continuous State and Action spaces. SAC optimises the "Maximum
+    Entropy Objective", this objective expands the traditional Reinforcement Learning objective of maximising the sum of
+    future discounted rewards with an Entropy term on the learnt Policy.
+
+    Note this implementation follows the original SAC algorithm from [1]_ where explicitly training a soft State-value
+    function alongside the Policy and twin Action-value functions is recommended. Their argument is doing so stabilises
+    training (cf. Sect.4.2 [1]_). The authors shortly after walk back this claim in [2]_ and reformulate SAC without a
+    State-value function. Choose class "QSAC" to avoid State-value functions.
+
+    References:
+        [1] Haarnoja, T., Zhou, A., Abbeel, P., & et al. (2018). "Soft actor-critic: Off-policy maximum entropy deep
+            reinforcement learning with a stochastic actor". In Proceedings of the 35th International Conference on
+            Machine Learning.
+        [2] Haarnoja, T., Zhou, A., Hartikainen, K., & et al. (2018). "Soft actor-critic algorithms and applications".
+            arXiv:1812.05905.
+        [3] Lillicrap, T. P., Hunt, J. J., Pritzel, A., & et al. (2015). "Continuous control with deep reinforcement
+            learning". arXiv:1509.02971.
+        [4] Fujimoto, S., Hoof, H., & Meger, D. (2018). "Addressing function approximation error in actor-critic
+            methods". In Proceedings of the 35th International Conference on Machine Learning.
+    """
+    def __init__(self,
+                 policy: GaussianPolicy,
+                 state_value_model: StateValueFunction,
+                 action_value_model: ContinuousActionValueFunction,
+                 action_value_twin_model: ContinuousActionValueFunction,
+                 discount_factor: float,
+                 learning_rate_policy: float,
+                 learning_rate_actions: float,
+                 learning_rate_states: float,
+                 polyak_factor: float,
+                 replay_memory_capacity: int,
+                 batch_size: int,
+                 target_refresh_steps: int,
+                 epsilon: float = 1e-8):
+        validate_config(discount_factor, 'discount_factor', 'unit')
+        validate_config(learning_rate_policy, 'learning_rate_policy', 'unitpositive')
+        validate_config(learning_rate_actions, 'learning_rate_actions', 'unitpositive')
+        validate_config(learning_rate_states, 'learning_rate_states', 'unitpositive')
+        validate_config(polyak_factor, 'polyak_factor', 'unit')
+        validate_config(replay_memory_capacity, 'replay_memory_capacity', 'positive')
+        validate_config(batch_size, 'batch_size', 'positive')
+        validate_config(target_refresh_steps, 'target_refresh_steps', 'positive')
+        validate_config(epsilon, 'epsilon', 'positive')
+        self.policy = policy
+        self.state_value_model = state_value_model
+        self.target_state_value_model = deepcopy(state_value_model)
+        self.action_value_model = action_value_model
+        self.action_value_twin_model = action_value_twin_model
+
+        self.discount_factor = discount_factor
+        self.learning_rate_policy = learning_rate_policy
+        self.learning_rate_actions = learning_rate_actions
+        self.learning_rate_states = learning_rate_states
+        self.polyak_factor = polyak_factor
+        self.replay_memory_capacity = replay_memory_capacity
+        self.batch_size = batch_size
+        self.target_refresh_steps = target_refresh_steps
+        self.eps = epsilon
+
+        self._experience_buffer = ExperienceBuffer(maxlen=replay_memory_capacity)
+        self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=self.learning_rate_policy)
+        self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_states)
+        self._optim_actions = pt.optim.SGD(self.action_value_model.parameters(), lr=self.learning_rate_actions)
+        self._optim_actions_twin = pt.optim.SGD(self.action_value_twin_model.parameters(),
+                                                lr=self.learning_rate_actions)
+        self._stepper = multi_optimiser_stepper(
+            self._optim_policy, self._optim_values, self._optim_actions, self._optim_actions_twin)
+        self.__steps = 0
+        self._polyak_weights = [polyak_factor, 1 - polyak_factor]
+
+    def sample_action(self, state: pt.Tensor, noisy: bool = False) -> t.Tuple[pt.Tensor, pt.Tensor]:
+        dist = self._build_policy_distribution(state)
+        if noisy:
+            action = dist.sample(state.shape[0])
+            logprob = dist.log_prob(action)
+        else:
+            unbounded_action = dist.mean + dist.variance * pt.randn_like(state.shape[0])
+            action = F.tanh(unbounded_action)
+            logprob = dist.log_prob(unbounded_action) - pt.log(1 - action ** 2 + self.eps)
+        return action, logprob
+
+    def _build_policy_distribution(self, state: pt.Tensor) -> pt.distributions.Distribution:
+        """Return a distribution parameterised by a variational Policy"""
+        mu, sigma = self.policy(state)
+        return pt.distributions.Normal(mu, sigma)
+
+    @persisted_generator_value
+    def online_optimise(
+        self,
+        starting_state: pt.Tensor
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[ContextualTrajectory, float]]:
+        """Apply policy for one episode before optimising value functions and Policy by replaying a minibatch of
+        experience.
+
+        Args:
+            starting_state:
+                State from which to begin the episode.
+
+        Yields:
+            Action chosen by Policy for the current state.
+
+        Receives:
+            Tuple (reward, successor, terminal, stop) containing the reward obtained by applying the action yielded, the
+            resulting successor state, and whether this state is terminal. And, finally, an indication of whether to
+            stop irrespective of the ending up in a terminal state.
+
+        Returns:
+            A tuple (trajectory, average_loss) containing the trajectory of the full episode and the average total error
+            for the sampled minibatch.
+        """
+        episode = []
+        state = starting_state
+        stop = False
+        # Run episode
+        while not stop:
+            action, _ = self.sample_action(state)
+            reward, next_state, terminal, stop = yield action
+            episode.append(ContextualTransition(state, action, reward, next_state, terminal))
+            state = next_state
+        # Optimise models over one minibatch
+        batch_loss = self.optimise_minibatch()
+        return episode, batch_loss
+
+    def optimise_minibatch(self, batch_size: t.Optional[int] = None) -> float:
+        batch_size = batch_size or self.batch_size
+        batch, _ = self._experience_buffer.sample(batch_size)
+
+        actions, logprobs = self.sample_action(batch['states'])
+        action_values = self.action_value_model(batch['states'], actions)
+        action_values_twin = self.action_value_twin_model(batch['states'], actions)
+        success_state_values = self.target_state_value_model(batch['next_states'])
+
+        # Compute Action-value losses: eq.9 `∇θ JQ(θ) = ∇θ Qθ (at, st) (Qθ (st, at) − r(st, at) − γV ¯ψ (st+1)`.
+        loss_actions = mse(onestep_td_error(
+            self.discount_factor, action_values, batch['rewards'], success_state_values, batch['terminations']))
+        loss_actions_twin = mse(onestep_td_error(
+            self.discount_factor, action_values_twin, batch['rewards'], success_state_values, batch['terminations']))
+
+        # to optimise the State-value function and the Policy we select the lowest action-value estimates among the twin
+        # Action-value functions (see Sect.4.2 [1]_).
+
+        # Compute State-value loss: eq.6 `∇ψ JV (ψ) = ∇ψ Vψ (st) (Vψ (st) − Qθ (st, at) + log πφ(at|st))`.
+        state_values = self.state_value_model(batch['states'])
+        loss_states = mse(state_values - pt.minimum(action_values, action_values_twin) + logprobs)
+
+        # Compute Policy loss using the reparameterisation trick `â~fφ(εt; st)`: eq.13 `∇φJπ (φ) = ∇φ log πφ(at|st) +
+        # (∇ât log πφ(ât|st) − ∇ât Q(st, ât))∇φfφ(εt; st)`.
+        noisy_actions, noisy_logprobs = self.sample_action(batch['states'], noisy=True)
+        noisy_action_values = self.action_value_model(batch['states'], actions)
+        noisy_action_values_twin = self.action_value_twin_model(batch['states'], actions)
+        loss_policy = (noisy_logprobs - pt.minimum(noisy_action_values, noisy_action_values_twin)).mean()
+
+        loss = loss_policy + loss_states + loss_actions + loss_actions_twin
+        self._stepper(loss)
+
+        self.__steps = (self.__steps + 1) % self.target_refresh_steps
+        if self.__steps == 0:
+            # Note: [1]_ authors use a different coefficient (`tau`) to control Polyak averaging that in addition is set
+            # specifically for the behaviour model, differing from [2]_ and [3]_. We retain the notation of DDPG.
+            polyak_averaging_inplace([self.target_state_value_model, self.state_value_model], self._polyak_weights)
+
+        return loss.item()

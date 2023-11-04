@@ -19,7 +19,7 @@ from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic, AdvantageActorCritic
 from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
 from unrl.algos.policy_gradient import Reinforce, BaselineReinforce
-from unrl.algos.ddpg import DDPG, TwinDelayedDDPG
+from unrl.algos.ddpg import DDPG, TwinDelayedDDPG, SAC
 from unrl.functions import Policy, ContinuousPolicy, GaussianPolicy, ContinuousActionValueFunction, ActionValueFunction, \
     StateValueFunction
 
@@ -64,7 +64,7 @@ class ExampleGaussianPolicy(GaussianPolicy):
         x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
         mu = self.layer_mu(x)
-        sigma = self.layer_sigma(x).reshape(self.num_action_dims, self.num_action_dims)
+        sigma = F.relu(self.layer_sigma(x)).reshape(self.num_action_dims, self.num_action_dims)
         return mu, sigma
 
 
@@ -251,3 +251,33 @@ def prepare_game_model_ddpg(num_state_dims: int, num_action_dims: int, twin: boo
     else:
         ddpg = DDPG(policy, action_value_model, **model_kwargs)
     return ddpg
+
+
+def prepare_game_model_sac(num_state_dims: int, num_action_dims: int) -> SAC:
+    discount_factor = 0.99
+    learning_rate_policy = 3e-4
+    learning_rate_values = 3e-4
+    learning_rate_actions = 3e-4
+    hidden_dim_policy = 256
+    hidden_dim_values = 256
+    hidden_dim_actions = 256
+    replay_memory_capacity = 10000
+    replay_minibatch = 256
+    polyak_factor = 0.995
+    refresh_steps = 1  # The target State-value function is continuously refreshed
+    model_kwargs = {
+        "discount_factor": discount_factor,
+        "learning_rate_policy": learning_rate_policy,
+        "learning_rate_values": learning_rate_values,
+        "learning_rate_actions": learning_rate_actions,
+        "polyak_factor": polyak_factor,
+        "replay_memory_capacity": replay_memory_capacity,
+        "batch_size": replay_minibatch,
+        "target_refresh_steps": refresh_steps
+    }
+    policy = ExampleGaussianPolicy(num_state_dims, num_action_dims, hidden_dim_policy)
+    state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
+    action_value_model = ExampleContinuousActionValueEstimator(num_state_dims, num_action_dims, hidden_dim_actions)
+    action_value_twin_model = ExampleContinuousActionValueEstimator(num_state_dims, num_action_dims, hidden_dim_actions)
+    sac = SAC(policy, state_value_model, action_value_model, action_value_twin_model, **model_kwargs)
+    return sac

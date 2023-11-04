@@ -62,3 +62,8 @@ def entropy(dist: t.Optional[pt.Tensor] = None, logits: t.Optional[pt.Tensor] = 
     if logits is not None:
         return (-logits.exp() * logits).sum()
     return pt.Tensor([0])
+
+
+def mse(error: pt.Tensor) -> pt.Tensor:
+    """Return the mean square of an error tensor"""
+    return (error ** 2).mean()
