@@ -19,7 +19,7 @@ from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic, AdvantageActorCritic
 from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
 from unrl.algos.policy_gradient import Reinforce, BaselineReinforce
-from unrl.algos.ddpg import DDPG, TwinDelayedDDPG, SAC
+from unrl.algos.ddpg import DDPG, TwinDelayedDDPG, SAC, QSAC
 from unrl.functions import Policy, ContinuousPolicy, GaussianPolicy, ContinuousActionValueFunction, ActionValueFunction, \
     StateValueFunction
 
@@ -253,7 +253,7 @@ def prepare_game_model_ddpg(num_state_dims: int, num_action_dims: int, twin: boo
     return ddpg
 
 
-def prepare_game_model_sac(num_state_dims: int, num_action_dims: int) -> SAC:
+def prepare_game_model_sac(num_state_dims: int, num_action_dims: int, use_state_value_function: bool = True) -> SAC:
     discount_factor = 0.99
     learning_rate_policy = 3e-4
     learning_rate_values = 3e-4
@@ -264,6 +264,7 @@ def prepare_game_model_sac(num_state_dims: int, num_action_dims: int) -> SAC:
     replay_memory_capacity = 10000
     replay_minibatch = 256
     polyak_factor = 0.995
+    entropy_coefficient = -num_action_dims
     refresh_steps = 1  # The target State-value function is continuously refreshed
     model_kwargs = {
         "discount_factor": discount_factor,
@@ -276,8 +277,17 @@ def prepare_game_model_sac(num_state_dims: int, num_action_dims: int) -> SAC:
         "target_refresh_steps": refresh_steps
     }
     policy = ExampleGaussianPolicy(num_state_dims, num_action_dims, hidden_dim_policy)
-    state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
     action_value_model = ExampleContinuousActionValueEstimator(num_state_dims, num_action_dims, hidden_dim_actions)
     action_value_twin_model = ExampleContinuousActionValueEstimator(num_state_dims, num_action_dims, hidden_dim_actions)
-    sac = SAC(policy, state_value_model, action_value_model, action_value_twin_model, **model_kwargs)
+    if use_state_value_function:
+        model_kwargs.update({
+            "learning_rate_values": learning_rate_values,
+        })
+        state_value_model = ExampleStateValueModel(num_state_dims, hidden_dim_values)
+        sac = SAC(policy, state_value_model, action_value_model, action_value_twin_model, **model_kwargs)
+    else:
+        model_kwargs.update({
+            "entropy_coefficient": entropy_coefficient,
+        })
+        sac = QSAC(policy, action_value_model, action_value_twin_model, **model_kwargs)
     return sac

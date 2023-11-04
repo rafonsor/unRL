@@ -382,13 +382,14 @@ class SAC:
         self.learning_rate_policy = learning_rate_policy
         self.learning_rate_actions = learning_rate_actions
         self.learning_rate_states = learning_rate_states
-        self.polyak_factor = polyak_factor
         self.replay_memory_capacity = replay_memory_capacity
         self.batch_size = batch_size
         self.target_refresh_steps = target_refresh_steps
         self.eps = epsilon
 
         self._experience_buffer = ExperienceBuffer(maxlen=replay_memory_capacity)
+        self._polyak_weights = [polyak_factor, 1 - polyak_factor]
+
         self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=self.learning_rate_policy)
         self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_states)
         self._optim_actions = pt.optim.SGD(self.action_value_model.parameters(), lr=self.learning_rate_actions)
@@ -397,7 +398,6 @@ class SAC:
         self._stepper = multi_optimiser_stepper(
             self._optim_policy, self._optim_values, self._optim_actions, self._optim_actions_twin)
         self.__steps = 0
-        self._polyak_weights = [polyak_factor, 1 - polyak_factor]
 
     def sample_action(self, state: pt.Tensor, noisy: bool = False) -> t.Tuple[pt.Tensor, pt.Tensor]:
         dist = self._build_policy_distribution(state)
@@ -489,5 +489,118 @@ class SAC:
             # Note: [1]_ authors use a different coefficient (`tau`) to control Polyak averaging that in addition is set
             # specifically for the behaviour model, differing from [2]_ and [3]_. We retain the notation of DDPG.
             polyak_averaging_inplace([self.target_state_value_model, self.state_value_model], self._polyak_weights)
+
+        return loss.item()
+
+
+class QSAC:
+    """Off-policy Soft Actor-Critic for continuous State and Action spaces, without State-value functions.
+
+    This is the implementation of the updated SAC algorithm from [1]_ which no longer relies on a State-value function.
+
+    References:
+        [1] Haarnoja, T., Zhou, A., Hartikainen, K., & et al. (2018). "Soft actor-critic algorithms and applications".
+            arXiv:1812.05905.
+    """
+    def __init__(self,
+                 policy: GaussianPolicy,
+                 action_value_model: ContinuousActionValueFunction,
+                 action_value_twin_model: ContinuousActionValueFunction,
+                 discount_factor: float,
+                 learning_rate_policy: float,
+                 learning_rate_actions: float,
+                 entropy_coefficient: float,
+                 polyak_factor: float,
+                 replay_memory_capacity: int,
+                 batch_size: int,
+                 target_refresh_steps: int,
+                 epsilon: float = 1e-8):
+        validate_config(discount_factor, 'discount_factor', 'unit')
+        validate_config(learning_rate_policy, 'learning_rate_policy', 'unitpositive')
+        validate_config(learning_rate_actions, 'learning_rate_actions', 'unitpositive')
+        validate_config(entropy_coefficient, 'entropy_coefficient', 'unit')
+        validate_config(polyak_factor, 'polyak_factor', 'unit')
+        validate_config(replay_memory_capacity, 'replay_memory_capacity', 'positive')
+        validate_config(batch_size, 'batch_size', 'positive')
+        validate_config(target_refresh_steps, 'target_refresh_steps', 'positive')
+        validate_config(epsilon, 'epsilon', 'positive')
+        self.policy = policy
+        self.action_value_model = action_value_model
+        self.action_value_twin_model = action_value_twin_model
+        self.target_action_value_model = deepcopy(action_value_model)
+        self.target_action_value_twin_model = deepcopy(action_value_twin_model)
+
+        self.discount_factor = discount_factor
+        self.learning_rate_policy = learning_rate_policy
+        self.learning_rate_actions = learning_rate_actions
+        self.entropy_coefficient = entropy_coefficient
+        self.replay_memory_capacity = replay_memory_capacity
+        self.batch_size = batch_size
+        self.target_refresh_steps = target_refresh_steps
+        self.eps = epsilon
+
+        self._experience_buffer = ExperienceBuffer(maxlen=replay_memory_capacity)
+        self._polyak_weights = [polyak_factor, 1 - polyak_factor]
+
+        self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=self.learning_rate_policy)
+        self._optim_actions = pt.optim.SGD(self.action_value_model.parameters(), lr=self.learning_rate_actions)
+        self._optim_actions_twin = pt.optim.SGD(self.action_value_twin_model.parameters(),
+                                                lr=self.learning_rate_actions)
+        self._stepper = multi_optimiser_stepper(self._optim_policy, self._optim_actions, self._optim_actions_twin)
+        self.__steps = 0
+
+    _build_policy_distribution = SAC._build_policy_distribution
+    sample_action = SAC.sample_action
+    online_optimise = SAC.online_optimise
+
+    def _compute_stochastic_estimates(self, states: pt.Tensor, noisy: bool = False, use_targets: bool = False) -> pt.Tensor:
+        """Compute Action-value estimates with an Entropy bonus from resampled actions for a batch of states.
+
+        The state-wise lowest Action-value estimate among the twin functions is used.
+
+        Args:
+            states: states from which to stochastically sample actions and obtain current Action-value estimates.
+            use_targets: whether to use the target or behaviour twin Action-value functions.
+
+        Returns:
+            Tensor of Action-value estimates for the provided batch.
+        """
+        actions, logprobs = self.sample_action(states, noisy=noisy)
+        if use_targets:
+            action_values = pt.minimum(
+                self.target_action_value_model(states, actions),
+                self.target_action_value_twin_model(states, actions)
+            )
+        else:
+            action_values = pt.minimum(
+                self.action_value_model(states, actions),
+                self.action_value_twin_model(states, actions)
+            )
+        return action_values - self.entropy_coefficient * logprobs
+
+    def optimise_minibatch(self, batch_size: t.Optional[int] = None) -> float:
+        batch_size = batch_size or self.batch_size
+        batch, _ = self._experience_buffer.sample(batch_size)
+
+        # For resampled actions, SAC uses the lowest action-value estimates among the twin Action-value functions to
+        # optimise Action-value functions and Policy.
+        action_values = self.action_value_model(batch['states'], batch['actions'])
+        action_values_twin = self.action_value_twin_model(batch['states'], batch['actions'])
+        target_estimates = self._compute_stochastic_estimates(batch['next_states'], use_targets=True)
+
+        # Actions are sampled using the reparameterisation trick `â~fφ(εt; st)` to provide differentiable probabilities.
+        loss_actions = mse(onestep_td_error(
+            self.discount_factor, action_values, batch['rewards'], target_estimates, batch['terminations']))
+        loss_actions_twin = mse(onestep_td_error(
+            self.discount_factor, action_values_twin, batch['rewards'], target_estimates, batch['terminations']))
+        loss_policy = self._compute_stochastic_estimates(batch['states'], noisy=True).mean()
+        loss = loss_policy + loss_actions + loss_actions_twin
+        self._stepper(loss)
+
+        self.__steps = (self.__steps + 1) % self.target_refresh_steps
+        if self.__steps == 0:
+            polyak_averaging_inplace([self.target_action_value_model, self.action_value_model], self._polyak_weights)
+            polyak_averaging_inplace([self.target_action_value_twin_model, self.action_value_twin_model],
+                                     self._polyak_weights)
 
         return loss.item()
