@@ -18,10 +18,10 @@ import torch as pt
 
 import unrl.types as t
 from unrl.algos.dqn import onestep_td_error
-from unrl.algos.policy_gradient import ContinuousPolicy
 from unrl.config import validate_config
 from unrl.containers import ContextualTransition, ContextualTrajectory
 from unrl.experience_buffer import ExperienceBuffer
+from unrl.functions import ContinuousPolicy, StateValueFunction, ContinuousActionValueFunction
 from unrl.optim import multi_optimiser_stepper, polyak_averaging_inplace
 from unrl.utils import persisted_generator_value
 
@@ -37,12 +37,12 @@ class DDPG:
     """
     policy: ContinuousPolicy
     target_policy: ContinuousPolicy
-    action_value_model: pt.nn.Module
-    target_action_value_model: pt.nn.Module
+    action_value_model: ContinuousActionValueFunction
+    target_action_value_model: ContinuousActionValueFunction
 
     def __init__(self,
                  policy: ContinuousPolicy,
-                 action_value_model: pt.nn.Module,
+                 action_value_model: ContinuousActionValueFunction,
                  discount_factor: float,
                  learning_rate_policy: float,
                  learning_rate_values: float,
@@ -192,8 +192,8 @@ class TwinDelayedDDPG(DDPG):
     """
     def __init__(self,
                  policy: ContinuousPolicy,
-                 action_value_model1: pt.nn.Module,
-                 action_value_model2: pt.nn.Module,
+                 action_value_model: ContinuousActionValueFunction,
+                 action_value_twin_model: ContinuousActionValueFunction,
                  discount_factor: float,
                  learning_rate_policy: float,
                  learning_rate_values: float,
@@ -207,11 +207,11 @@ class TwinDelayedDDPG(DDPG):
                  policy_update_delay: int):
         validate_config(noise_epsilon, 'noise_epsilon', 'positive')
         validate_config(policy_update_delay, 'policy_update_delay', 'positive')
-        super().__init__(policy, action_value_model1, discount_factor, learning_rate_policy, learning_rate_values,
+        super().__init__(policy, action_value_model, discount_factor, learning_rate_policy, learning_rate_values,
                          noise_scale, noise_exploration, polyak_factor, replay_memory_capacity, batch_size,
                          target_refresh_steps)
-        self.action_value_twin_model = action_value_model2
-        self.target_action_value_twin_model = deepcopy(action_value_model2)
+        self.action_value_twin_model = action_value_twin_model
+        self.target_action_value_twin_model = deepcopy(action_value_twin_model)
         self.noise_epsilon = noise_epsilon
 
         self._optim_values_twin = pt.optim.SGD(self.action_value_twin_model.parameters(), lr=self.learning_rate_values)

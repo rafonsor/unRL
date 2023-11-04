@@ -22,6 +22,7 @@ from unrl.algos.dqn import onestep_td_error
 from unrl.basic import entropy
 from unrl.config import validate_config
 from unrl.containers import FrozenTrajectory
+from unrl.functions import Policy, StateValueFunction
 from unrl.optim import multi_optimiser_stepper
 
 
@@ -29,18 +30,6 @@ class GradientAccumulationMode(Enum):
     STEP = 'step'
     EPISODE = 'episode'
     BATCH = 'batch'
-
-
-class Policy(pt.nn.Module):
-    def forward(self, state: pt.Tensor) -> pt.Tensor:
-        """Returns logprobabilies of actions"""
-        ...
-
-
-class ContinuousPolicy(Policy):
-    def forward(self, state: pt.Tensor) -> pt.Tensor:
-        """Returns a continuous-valued action"""
-        ...
 
 
 class Reinforce:
@@ -89,11 +78,11 @@ class BaselineReinforce(Reinforce):
     """REINFORCE Monte-Carlo Policy-Gradient with state-value estimates as a return Baseline. Learns both a policy and a
      state-value function"""
     policy: Policy
-    state_value_model: pt.nn.Module
+    state_value_model: StateValueFunction
 
     def __init__(self,
                  policy: Policy,
-                 state_value_model: pt.nn.Module,
+                 state_value_model: StateValueFunction,
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  discount_factor: float):
@@ -142,11 +131,11 @@ class TRPO(Reinforce):
     """
     policy: Policy
     target_policy: Policy
-    state_value_model: pt.nn.Module
+    state_value_model: StateValueFunction
 
     def __init__(self,
                  policy: Policy,
-                 state_value_model: pt.nn.Module,
+                 state_value_model: StateValueFunction,
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  discount_factor: float,
@@ -238,11 +227,11 @@ class SimplifiedPPO(Reinforce):
     """
     policy: Policy
     behaviour_policy: Policy
-    state_value_model: pt.nn.Module
+    state_value_model: StateValueFunction
 
     def __init__(self,
                  policy: Policy,
-                 state_value_model: pt.nn.Module,
+                 state_value_model: StateValueFunction,
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  discount_factor: float,
@@ -300,11 +289,11 @@ class PPO(Reinforce):
     """
     policy: Policy
     target_policy: Policy
-    state_value_model: pt.nn.Module
+    state_value_model: StateValueFunction
 
     def __init__(self,
                  policy: Policy,
-                 state_value_model: pt.nn.Module,
+                 state_value_model: StateValueFunction,
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  discount_factor: float,

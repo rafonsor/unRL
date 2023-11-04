@@ -18,7 +18,10 @@ import unrl.types as t
 from unrl.action_sampling import ActionSamplingMode, make_sampler
 from unrl.algos.actor_critic import ActorCritic, EligibilityTraceActorCritic, AdvantageActorCritic
 from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubleDQN, DQNPrioritisedExperienceReplay
-from unrl.algos.policy_gradient import Policy, Reinforce, BaselineReinforce, DDPG, ContinuousPolicy, TwinDelayedDDPG
+from unrl.algos.policy_gradient import Reinforce, BaselineReinforce
+from unrl.algos.ddpg import DDPG, TwinDelayedDDPG
+from unrl.functions import Policy, ContinuousPolicy, GaussianPolicy, ContinuousActionValueFunction, ActionValueFunction, \
+    StateValueFunction
 
 
 class ExamplePolicy(Policy):
@@ -48,7 +51,24 @@ class ExampleContinuousPolicy(ContinuousPolicy):
         return self.layer3(x)
 
 
-class ExampleStateValueModel(pt.nn.Module):
+class ExampleGaussianPolicy(GaussianPolicy):
+    def __init__(self, num_state_dims: int, num_action_dims: int, hidden_dim: int):
+        super().__init__()
+        self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
+        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
+        self.layer_mu = pt.nn.Linear(hidden_dim, num_action_dims)
+        self.layer_sigma = pt.nn.Linear(hidden_dim, num_action_dims * num_action_dims)
+        self.num_action_dims = num_action_dims
+
+    def forward(self, state: pt.Tensor) -> t.Tuple[pt.Tensor, pt.Tensor]:
+        x = F.relu(self.layer1(state))
+        x = F.relu(self.layer2(x))
+        mu = self.layer_mu(x)
+        sigma = self.layer_sigma(x).reshape(self.num_action_dims, self.num_action_dims)
+        return mu, sigma
+
+
+class ExampleStateValueModel(StateValueFunction):
     def __init__(self, num_state_dims, hidden_dim: int):
         super().__init__()
         self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
@@ -61,7 +81,7 @@ class ExampleStateValueModel(pt.nn.Module):
         return self.layer3(x)
 
 
-class ExampleActionValueEstimator(pt.nn.Module):
+class ExampleActionValueEstimator(ActionValueFunction):
     def __init__(self, num_state_dims: int, num_actions: int, hidden_dim: int):
         super().__init__()
         self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
@@ -74,7 +94,7 @@ class ExampleActionValueEstimator(pt.nn.Module):
         return self.layer3(x)
 
 
-class ExampleContinuousActionValueEstimator(pt.nn.Module):
+class ExampleContinuousActionValueEstimator(ContinuousActionValueFunction):
     def __init__(self, num_state_dims: int, num_action_dims: int, hidden_dim: int):
         super().__init__()
         self.layer_state = pt.nn.Linear(num_state_dims, hidden_dim)

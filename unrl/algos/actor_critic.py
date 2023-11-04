@@ -16,10 +16,10 @@ import torch as pt
 import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
 from unrl.algos.dqn import onestep_td_error
-from unrl.algos.policy_gradient import Policy
 from unrl.basic import entropy
 from unrl.config import validate_config
 from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
+from unrl.functions import Policy, StateValueFunction
 from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper
 from unrl.utils import persisted_generator_value
 
@@ -27,12 +27,12 @@ from unrl.utils import persisted_generator_value
 class ActorCritic:
     """One-Step Online Actor-Critic for episodic settings"""
     policy: Policy
-    state_value_model: pt.nn.Module
+    state_value_model: StateValueFunction
     sampler: ActionSampler  # Strategy for sampling actions from the policy
 
     def __init__(self,
                  policy: Policy,
-                 state_value_model: pt.nn.Module,
+                 state_value_model: StateValueFunction,
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  discount_factor: float,
@@ -118,7 +118,7 @@ class ActorCritic:
 class EligibilityTraceActorCritic:
     """One-Step Online Actor-Critic with eligibility traces for episodic settings"""
     policy: Policy
-    state_value_model: pt.nn.Module
+    state_value_model: StateValueFunction
     sampler: ActionSampler
 
     _optim_policy: EligibilityTraceOptimizer
@@ -126,7 +126,7 @@ class EligibilityTraceActorCritic:
 
     def __init__(self,
                  policy: Policy,
-                 state_value_model: pt.nn.Module,
+                 state_value_model: StateValueFunction,
                  *,
                  discount_factor: float,
                  learning_rate_policy: float,
@@ -227,12 +227,12 @@ class AdvantageActorCritic:
             In Proceedings of The 33rd International Conference on Machine Learning.
     """
     policy: Policy
-    state_value_model: pt.nn.Module
+    state_value_model: StateValueFunction
     sampler: ActionSampler  # Strategy for sampling actions from the policy
 
     def __init__(self,
                  policy: Policy,
-                 state_value_model: pt.nn.Module,
+                 state_value_model: StateValueFunction,
                  learning_rate_policy: float,
                  learning_rate_values: float,
                  discount_factor: float,

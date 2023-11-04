@@ -25,6 +25,7 @@ from unrl.action_sampling import EpsilonGreedyActionSampler, GreedyActionSampler
 from unrl.containers import ContextualTransition, ContextualTrajectory
 from unrl.experience_buffer import ExperienceBufferProtocol, ExperienceBuffer, NaivePrioritisedExperienceBuffer, \
     RankPartitionedPrioritisedExperienceBuffer
+from unrl.functions import ActionValueFunction
 from unrl.utils import persisted_generator_value
 
 __all__ = [
@@ -65,7 +66,7 @@ class DQN:
             learning". Nature, 518, pp. 529-533.
     """
     def __init__(self,
-                 action_value_model: pt.nn.Module,
+                 action_value_model: ActionValueFunction,
                  *,
                  learning_rate: float,
                  discount_factor: float,
@@ -170,7 +171,7 @@ class _DQNExperienceReplayBase(DQN, metaclass=ABCMeta):
     implementation of an Experience buffer matching ExperienceBufferProtocol."""
 
     def __init__(self,
-                 action_value_model: pt.nn.Module,
+                 action_value_model: ActionValueFunction,
                  *,
                  learning_rate: float,
                  discount_factor: float,
@@ -239,7 +240,7 @@ class DQNExperienceReplay(_DQNExperienceReplayBase):
             learning". Nature, 518, pp. 529-533.
     """
     def __init__(self,
-                 action_value_model: pt.nn.Module,
+                 action_value_model: ActionValueFunction,
                  *,
                  learning_rate: float,
                  discount_factor: float,
@@ -274,7 +275,7 @@ class DQNPrioritisedExperienceReplay(_DQNExperienceReplayBase):
     beta: float
 
     def __init__(self,
-                 action_value_model: pt.nn.Module,
+                 action_value_model: ActionValueFunction,
                  *,
                  learning_rate: float,
                  discount_factor: float,
@@ -386,7 +387,7 @@ class DoubleDQN(DQNExperienceReplay, _DoubleDQNBase):
             Proceedings of the AAAI conference on artificial intelligence, 30.
     """
     def __init__(self,
-                 action_value_model: pt.nn.Module,
+                 action_value_model: ActionValueFunction,
                  *,
                  learning_rate: float,
                  discount_factor: float,
@@ -412,7 +413,7 @@ class PrioritisedDoubleDQN(DQNPrioritisedExperienceReplay, _DoubleDQNBase):
             Proceedings of the AAAI conference on artificial intelligence, 30.
     """
     def __init__(self,
-                 action_value_model: pt.nn.Module,
+                 action_value_model: ActionValueFunction,
                  *,
                  learning_rate: float,
                  discount_factor: float,
