@@ -18,12 +18,19 @@ import torch as pt
 
 import unrl.types as t
 from unrl.action_sampling import make_sampler, ActionSamplingMode
-from unrl.algos.dqn import onestep_td_error
-from unrl.basic import entropy
+from unrl.basic import onestep_td_error, entropy
 from unrl.config import validate_config
 from unrl.containers import FrozenTrajectory
 from unrl.functions import Policy, StateValueFunction
 from unrl.optim import multi_optimiser_stepper
+
+__all__ = [
+    "Reinforce",
+    "BaselineReinforce",
+    "TRPO",
+    "SimplifiedPPO",
+    "PPO"
+]
 
 
 class GradientAccumulationMode(Enum):
@@ -64,7 +71,7 @@ class Reinforce:
             self._optim.step()
         return total_loss / len(episode)
 
-    def batch_optimise(self, episodes: t.Sequence[FrozenTrajectory]):
+    def optimise_batch(self, episodes: t.Sequence[FrozenTrajectory]):
         for episode in episodes:
             self.optimise(episode)
 

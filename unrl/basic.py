@@ -64,6 +64,27 @@ def entropy(dist: t.Optional[pt.Tensor] = None, logits: t.Optional[pt.Tensor] = 
     return pt.Tensor([0])
 
 
+def onestep_td_error(discount_factor: t.FloatLike,
+                     value: pt.Tensor,
+                     reward: t.FloatLike,
+                     successor_value: pt.Tensor,
+                     terminal: t.BoolLike,
+                     ) -> pt.Tensor:
+    """Computes One-step TD-error ``r + γQ(s_{t+1},a_{t+1}) - Q(s_t, a_t)`` for a single transition or a batch.
+
+    Args:
+        reward:
+        discount_factor:
+        value:
+        successor_value:
+        terminal:
+
+    Returns:
+        Unidimensional tensor of One-step TD-error depending on the inputs size.
+    """
+    return reward + (1 - terminal) * discount_factor * successor_value - value
+
+
 def mse(error: pt.Tensor) -> pt.Tensor:
     """Return the mean square of an error tensor"""
     return (error ** 2).mean()

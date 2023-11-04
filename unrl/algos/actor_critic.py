@@ -15,13 +15,19 @@ import torch as pt
 
 import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
-from unrl.algos.dqn import onestep_td_error
-from unrl.basic import entropy
+from unrl.basic import onestep_td_error, entropy
 from unrl.config import validate_config
 from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
 from unrl.functions import Policy, StateValueFunction
 from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper
 from unrl.utils import persisted_generator_value
+
+__all__ = [
+    "ActorCritic",
+    "EligibilityTraceActorCritic",
+    "AdvantageActorCritic",
+    "A2C"
+]
 
 
 class ActorCritic:
@@ -56,7 +62,7 @@ class ActorCritic:
         self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=self.learning_rate_values)
 
     @persisted_generator_value
-    def online_optimise(
+    def optimise_online(
         self,
         starting_state: pt.Tensor,
     ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
@@ -161,7 +167,7 @@ class EligibilityTraceActorCritic:
         self.sampler = action_sampler or make_sampler(ActionSamplingMode.GREEDY)
 
     @persisted_generator_value
-    def online_optimise(
+    def optimise_online(
         self,
         starting_state: pt.Tensor,
     ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
@@ -292,12 +298,12 @@ class AdvantageActorCritic:
         self._stepper(total_loss)
         return total_loss.item()
 
-    def batch_optimise(self, episodes: t.Sequence[FrozenTrajectory]):
+    def optimise_batch(self, episodes: t.Sequence[FrozenTrajectory]):
         for episode in episodes:
             self.optimise(episode)
 
     @persisted_generator_value
-    def online_optimise(
+    def optimise_online(
         self,
         starting_state: pt.Tensor,
     ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:

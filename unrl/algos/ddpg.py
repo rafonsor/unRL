@@ -18,14 +18,21 @@ import torch as pt
 import torch.nn.functional as F
 
 import unrl.types as t
-from unrl.algos.dqn import onestep_td_error
-from unrl.basic import mse
+from unrl.basic import onestep_td_error, mse
 from unrl.config import validate_config
 from unrl.containers import ContextualTransition, ContextualTrajectory
 from unrl.experience_buffer import ExperienceBuffer
 from unrl.functions import ContinuousPolicy, StateValueFunction, ContinuousActionValueFunction, GaussianPolicy
 from unrl.optim import multi_optimiser_stepper, polyak_averaging_inplace
 from unrl.utils import persisted_generator_value
+
+__all__ = [
+    "DDPG",
+    "TwinDelayedDDPG",
+    "TD3",
+    "SAC",
+    "QSAC"
+]
 
 
 class DDPG:
@@ -113,7 +120,7 @@ class DDPG:
         return onestep_td_error(self.discount_factor, values, batch['rewards'], successor_values, batch['terminations'])
 
     @persisted_generator_value
-    def online_optimise(
+    def optimise_online(
         self,
         starting_state: pt.Tensor
     ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[ContextualTrajectory, float]]:
@@ -254,7 +261,7 @@ class TwinDelayedDDPG(DDPG):
         return onestep_td_error(self.discount_factor, values, batch['rewards'], successor_values, batch['terminations'])
 
     @persisted_generator_value
-    def online_optimise(
+    def optimise_online(
         self,
         starting_state: pt.Tensor
     ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[ContextualTrajectory, float]]:
@@ -326,6 +333,9 @@ class TwinDelayedDDPG(DDPG):
                 gc.collect()
 
         return episode, total_loss / len(episode)
+
+
+TD3 = TwinDelayedDDPG
 
 
 class SAC:
@@ -416,7 +426,7 @@ class SAC:
         return pt.distributions.Normal(mu, sigma)
 
     @persisted_generator_value
-    def online_optimise(
+    def optimise_online(
         self,
         starting_state: pt.Tensor
     ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[ContextualTrajectory, float]]:
@@ -551,7 +561,7 @@ class QSAC:
 
     _build_policy_distribution = SAC._build_policy_distribution
     sample_action = SAC.sample_action
-    online_optimise = SAC.online_optimise
+    optimise_online = SAC.optimise_online
 
     def _compute_stochastic_estimates(self, states: pt.Tensor, noisy: bool = False, use_targets: bool = False) -> pt.Tensor:
         """Compute Action-value estimates with an Entropy bonus from resampled actions for a batch of states.

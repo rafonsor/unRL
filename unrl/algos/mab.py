@@ -19,6 +19,16 @@ from functools import wraps
 
 from unrl.basic import argmax_random
 
+__all__ = [
+    "MultiArmedBanditConfig",
+    # Algorithms
+    "MultiArmedBandit",
+    "MultiArmedBanditEpsilonGreedy",
+    "IncrementalMultiArmedBandit",
+    "IncrementalMultiArmedBanditEpsilonGreedy",
+    "IncrementalMultiArmedBanditUCB",
+]
+
 
 def epsilon_greedy(cls: t.Type) -> t.Type:
     orig__init__ = cls.__init__
@@ -51,7 +61,7 @@ class MultiArmedBanditConfig:
     weighted_average_alpha: float = None
     initial_q_estimates: float | t.List[float] = 0.0
     ucb_exploration: float = None
-    
+
     def __init__(self, k: int, **kwargs):
         self.update_config(k, **kwargs)
         self.validate_config()

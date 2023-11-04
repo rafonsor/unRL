@@ -20,9 +20,9 @@ import torch as pt
 from torch.optim import SGD
 
 import unrl.types as t
-from unrl.basic import mse
-from unrl.config import validate_config
 from unrl.action_sampling import EpsilonGreedyActionSampler, GreedyActionSampler
+from unrl.basic import mse, onestep_td_error
+from unrl.config import validate_config
 from unrl.containers import ContextualTransition, ContextualTrajectory
 from unrl.experience_buffer import ExperienceBufferProtocol, ExperienceBuffer, NaivePrioritisedExperienceBuffer, \
     RankPartitionedPrioritisedExperienceBuffer
@@ -36,27 +36,6 @@ __all__ = [
     "DoubleDQN",
     "PrioritisedDoubleDQN"
 ]
-
-
-def onestep_td_error(discount_factor: t.FloatLike,
-                     value: pt.Tensor,
-                     reward: t.FloatLike,
-                     successor_value: pt.Tensor,
-                     terminal: t.BoolLike,
-                     ) -> pt.Tensor:
-    """Computes One-step TD-error ``r + γQ(s_{t+1},a_{t+1}) - Q(s_t, a_t)`` for a single transition or a batch.
-
-    Args:
-        reward:
-        discount_factor:
-        value:
-        successor_value:
-        terminal:
-
-    Returns:
-        Unidimensional tensor of One-step TD-error depending on the inputs size.
-    """
-    return reward + (1 - terminal) * discount_factor * successor_value - value
 
 
 class DQN:
@@ -86,7 +65,7 @@ class DQN:
         self._optim = SGD(self.behaviour_model.parameters(), lr=learning_rate)
 
     @persisted_generator_value
-    def online_optimise(
+    def optimise_online(
         self,
         starting_state: pt.Tensor
     ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[ContextualTrajectory, float]]:
