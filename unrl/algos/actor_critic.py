@@ -12,10 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import torch as pt
+import torch.nn.functional as F
 
 import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
-from unrl.basic import onestep_td_error, entropy
+from unrl.basic import onestep_td_error, entropy, mse
 from unrl.config import validate_config
 from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
 from unrl.functions import Policy, StateValueFunction
@@ -370,3 +371,164 @@ class AdvantageActorCritic:
 
 
 A2C = AdvantageActorCritic
+
+
+class ICM:
+    """Model-based Advantage Actor-Critic model with an Intrinsic Curiosity Module (ICM) that learns forward and inverse
+    models of the effects of actions in the world, for discrete Action space settings. From mismatches between
+    self-supervised predictions from the forward and inverse models and observations, ICM provides an intrinsic reward
+    to complement the environment's that promotes exploration.
+
+    Note: ICM supports continuous Action space, this implementation is only adapted for discrete Action spaces.
+
+    References:
+        [1] Deepak Pathak, Pulkit Agrawal, Alexei A. Efros & et al. (2017). "Curiosity-driven Exploration by
+            Self-supervised Prediction". Proceedings of the 34th International Conference on Machine Learning.
+    """
+
+    def __init__(self,
+                 policy: Policy,
+                 state_value_model: StateValueFunction,
+                 state_encoder: pt.nn.Module,
+                 forward_model: pt.nn.Module,
+                 inverse_model: pt.nn.Module,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 learning_rate_forward: float,
+                 learning_rate_inverse: float,
+                 discount_factor: float,
+                 forward_loss_scaling: float,
+                 policy_loss_importance: float,
+                 beta: float,
+                 action_sampler: t.Optional[ActionSampler] = None
+                 ):
+        self.policy = policy
+        self.state_value_model = state_value_model
+        self.state_encoder = state_encoder
+        self.forward_model = forward_model
+        self.inverse_model = inverse_model
+        self.discount_factor = discount_factor
+        self.forward_loss_scaling = forward_loss_scaling
+        self.beta = beta
+        self.policy_loss_importance = policy_loss_importance
+        self._sampler = action_sampler or make_sampler(ActionSamplingMode.EPSILON_GREEDY)
+        self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=learning_rate_policy)
+        self._optim_values = pt.optim.SGD(self.state_value_model.parameters(), lr=learning_rate_values)
+        self._optim_forward = pt.optim.SGD(self.forward_model.parameters(), lr=learning_rate_forward)
+        self._optim_inverse = pt.optim.SGD(self.inverse_model.parameters(), lr=learning_rate_inverse)
+        self._stepper = multi_optimiser_stepper(self._optim_policy, self._optim_values, self._optim_inverse)
+        self._stepper_forward = multi_optimiser_stepper(self._optim_forward)
+
+    sample = AdvantageActorCritic.sample
+
+    def _compute_losses_and_running_reward(self,
+                                           transition: ContextualTransition,
+                                           logprobs: pt.Tensor,
+                                           future_reward: pt.Tensor
+                                           ) -> t.Tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
+        """Compute all losses and future reward to backpropagate
+
+        Args:
+            transition: SARST transition.
+            logprobs: action log-probabilities conditioned on the transition's starting state.
+            future_reward: total future reward from the subsequent transition.
+
+        Returns:
+            A tuple (total loss, forward model loss, reward from starting state). Where the total loss includes the
+            forward loss.
+        """
+        # Encoded states
+        encoded_state = self.state_encoder(transition.state)
+        encoded_next_state = self.state_encoder(transition.next_state)
+        # Inverse model's prediction of applied action
+        inverse_action = self.inverse_model(encoded_state, encoded_next_state)
+        inverse_error = F.cross_entropy(
+            F.log_softmax(logprobs, dim=-1),
+            F.softmax(F.one_hot(inverse_action, logprobs.shape[0]), dim=-1)
+        )
+        # Forward model's prediction of state transition
+        predicted_next_state = self.forward_model(encoded_state, transition.action)
+        forward_error_norm = mse(predicted_next_state - transition.state)
+        # Set discounted future rewards and add intrinsic reward derived from the forward model's expectation
+        intrinsic_reward = self.forward_loss_scaling * forward_error_norm
+        reward = intrinsic_reward + transition.reward + self.discount_factor * future_reward
+        # Calculate the advantage
+        estimate = self.state_value_model(transition.state)
+        advantage = reward - estimate
+        # Compute losses
+        loss_inverse = (1 - self.beta) * inverse_error
+        loss_forward = forward_error_norm  # scaled by `beta` when passing to the joint loss
+        loss_policy = self.policy_loss_importance * -logprobs[transition.action] * advantage
+        loss_values = (advantage ** 2).mean()
+        total_loss = loss_values + loss_policy + self.beta * loss_forward + loss_inverse
+        return total_loss, loss_forward, reward
+
+    def optimise(self, episode: ContextualTrajectory) -> float:
+        total_loss = total_forward_loss = 0
+        R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
+        for transition in episode[::-1]:
+            logprobs = self.policy(transition.state)
+            transition_loss, forward_loss, R = self._compute_losses_and_running_reward(transition, logprobs, R)
+            total_loss += transition_loss
+            total_forward_loss += forward_loss
+
+        # Apply updates. Note that policy loss gradient must not be backpropagated to the forward model to prevent
+        # degenerate solutions where the agent rewards itself (see Sect.2.2 [1]_).
+        self._stepper_forward(total_forward_loss, retain_graph=True)
+        self._stepper(total_loss)
+        return total_loss.item()
+
+    optimise_batch = AdvantageActorCritic.optimise_batch
+
+    @persisted_generator_value
+    def optimise_online(
+        self,
+        starting_state: pt.Tensor,
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
+        """Optimise policy, state-value function, and world models online for one episode.
+
+        Args:
+            starting_state:
+                State from which to begin the episode.
+
+        Yields:
+            Action chosen by policy for the current state.
+
+        Receives:
+            Tuple (reward, successor, terminal, stop) containing the reward obtained by applying the action yielded, the
+            resulting successor state, and whether this state is terminal. And, finally, an indication of whether to
+            stop irrespective of the ending up in a terminal state.
+
+        Returns:
+            A tuple (trajectory, average_loss) containing the trajectory of the full episode and the average TD-error.
+        """
+        episode = []
+        logits = []
+        state = starting_state
+        stop = False
+
+        # Run episode
+        while not stop:
+            logprobs = self.policy(state)
+            action = self._sampler.sample(logprobs)
+            logits.append(logprobs)
+            # Share action
+            reward, next_state, terminal, stop = yield action
+            # Save transition
+            episode.append(ContextualTransition(state, action.type(pt.int), reward, next_state, terminal))
+            state = next_state
+
+        # Accumulate gradients
+        R = pt.Tensor([0]) if episode[-1].terminates else self.state_value_model(episode[-1].next_state)
+        total_loss = total_forward_loss = 0
+        for transition, logprobs in zip(episode[::-1], logits):
+            transition_loss, forward_loss, R = self._compute_losses_and_running_reward(transition, logprobs, R)
+            total_loss += transition_loss
+            total_forward_loss += forward_loss
+
+        # Apply updates. Note that policy loss gradient must not be backpropagated to the forward model to prevent
+        # degenerate solutions where the agent rewards itself (see Sect.2.2 [1]_).
+        self._stepper_forward(total_forward_loss, retain_graph=True)
+        self._stepper(total_loss)
+        del logits
+        return episode, total_loss.item()

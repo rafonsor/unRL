@@ -124,7 +124,7 @@ class BaselineReinforce(Reinforce):
 class TRPO(Reinforce):
     """Trust Region Policy Optimisation (TRPO) proposed by [1]_ is a policy gradient algorithm that constrains the
     magnitude of updates by subjecting them to a penalty based on the KL divergence between behaviour and target
-    policies.
+    policies. TRPO effectively optimises Policy and State-value function using natural gradients.
 
     This penalty is controlled by a fixed positive coefficient `beta`. A heuristic for an adaptive coefficient is
     evaluated in [2]_. To enable this heuristic, `kl_divergence_reference`, which defines a reference divergence to
