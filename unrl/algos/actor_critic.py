@@ -27,7 +27,8 @@ __all__ = [
     "ActorCritic",
     "EligibilityTraceActorCritic",
     "AdvantageActorCritic",
-    "A2C"
+    "A2C",
+    "ICM",
 ]
 
 
