@@ -51,3 +51,17 @@ def optional_lock(mutex: t.Optional[Lock]):
             yield
     else:
         yield
+
+
+def flat_tensor(tensors: t.Sequence[pt.Tensor]) -> pt.Tensor:
+    """Convert a collection of tensors into a 1D vector"""
+    if len(tensors):
+        return pt.concat([x.view(-1) for x in tensors])
+    return pt.Tensor()
+
+
+def moving_average_inplace(base: pt.Tensor, update: pt.Tensor, rate: float):
+    """Apply moving average `base <- rate*base + (1-base)*update` as an inplace operation"""
+    base *= rate / (1 - rate)
+    base += update
+    base *= (1 - rate)
