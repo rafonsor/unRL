@@ -20,7 +20,7 @@ from unrl.basic import onestep_td_error, entropy, mse
 from unrl.config import validate_config
 from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
 from unrl.functions import Policy, StateValueFunction
-from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper
+from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper, KFACOptimizer
 from unrl.utils import persisted_generator_value
 
 __all__ = [
@@ -533,3 +533,34 @@ class ICM:
         self._stepper(total_loss)
         del logits
         return episode, total_loss.item()
+
+
+class ACKTR(AdvantageActorCritic):
+    """Actor-Critic using Kronecker-factored Trust Region. This algorithm implements an Actor-Critic framework,
+    optimised using the principles of TRPO: bounded updates following the natural gradient; that bring higher sample
+    efficiency. Instead of directly calculating the natural gradient with the KL divergence between the behaviour and
+    target Policies, ACKTR uses the Kronecker-factored Approximate Curvature method as an approximation. Parameter
+    updates are further applied layer-by-layer to reduce the computational complexity of the factorisation.
+
+    References:
+        [1] Wu, Y., Mansimov, E., Grosse, R. B., & et al. (2017). "Scalable trust-region method for deep reinforcement
+            learning using kronecker-factored approximation". Advances in neural information processing systems, 30.
+    """
+    def __init__(self,
+                 policy: Policy,
+                 state_value_model: StateValueFunction,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 discount_factor: float,
+                 trust_region_radius: float = 1e-3,
+                 entropy_coefficient: float = 1e-2,
+                 ):
+        validate_config(trust_region_radius, "trust_region_radius", "nonnegative")
+        super().__init__(
+            policy, state_value_model, learning_rate_policy, learning_rate_values, discount_factor, entropy_coefficient)
+        self.trust_region_radius = trust_region_radius
+        self._optim_policy = KFACOptimizer(self.policy, trust_region_radius=trust_region_radius,
+                                           learning_rate=learning_rate_policy, max_learning_rate=learning_rate_policy)
+        self._optim_values = KFACOptimizer(self.policy, trust_region_radius=trust_region_radius,
+                                           learning_rate=learning_rate_values, max_learning_rate=learning_rate_values)
+        self._stepper = multi_optimiser_stepper(self._optim_policy, self._optim_values)

@@ -10,7 +10,7 @@ The path forward:
 
 - [x] A2C: [Advantage Actor-Critic](unrl/algos/actor_critic.py)
 - [ ] ACER: [Sample Efficient Actor-Critic with Experience Replay](https://arxiv.org/pdf/1611.01224.pdf)
-- [ ] ACKTR: [Actor Critic using Kronecker-Factored Trust Region](https://arxiv.org/abs/1708.05144)
+- [x] ACKTR: [Actor Critic using Kronecker-Factored Trust Region](https://arxiv.org/abs/1708.05144)
 - [ ] Continual PPO: [Loss of Plasticity in Deep Continual Learning](https://arxiv.org/pdf/2306.13812.pdf)
   - In Appendix E
   - Paper unveils "continual backpropagation": proposes tracking Utility of activation units to guide parameter re-initialisation

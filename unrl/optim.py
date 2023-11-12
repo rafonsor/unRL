@@ -270,6 +270,7 @@ class KFACOptimizer(pt.optim.SGD):
                  momentum: float = 0,
                  dampening: float = 0,
                  weight_decay: float = 1e-5,
+                 max_epsilon: float = 0.95,
                  tikhonov_damping: float = 150.0,
                  tikhonov_refresh_steps: int = 5,
                  factored_tikhonov_refresh_steps: int = 20,
@@ -297,7 +298,7 @@ class KFACOptimizer(pt.optim.SGD):
         """
         validate_config(learning_rate, "learning_rate", "unitpositive")
         validate_config(trust_region_radius, "trust_region_radius", "positive")
-        validate_config(max_epsilon, "max_epsilon", "positive")
+        validate_config(max_epsilon, "max_epsilon", "unit")
         validate_config(max_learning_rate, "max_learning_rate", "unitpositive")
         validate_config(momentum, "momentum", "unitp")
         validate_config(dampening, "dampening", "unit")
