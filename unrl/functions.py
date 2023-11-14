@@ -63,3 +63,23 @@ class ContinuousActionValueFunction(pt.nn.Module):
     def forward(self, state: pt.Tensor, action: pt.Tensor) -> pt.Tensor:
         """Returns action-value estimate for the requested action"""
         ...
+
+
+class DuelingActionValueFunction(pt.nn.Module):
+    """Action-value function with two-headed outputs for discrete Action spaces"""
+    num_state_dims: int
+    num_actions: int
+
+    def forward(self, state: pt.Tensor, *, combine: bool = True) -> pt.Tensor | t.Tuple[pt.Tensor, pt.Tensor]:
+        """Returns action-value estimates for the entire Action space. Action-value estimates are composed from
+        two-headed outputs state-value and action advantage estimates.
+
+        Args:
+            state: State
+            combine: when "True", returns action-value estimates by directly summing state-value and action advantage
+                     estimates.
+
+        Returns:
+            Either a tensor with action-value estimates, if `combine` is True, else a tuple (state-value, advantage).
+        """
+        ...

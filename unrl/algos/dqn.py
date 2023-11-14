@@ -26,7 +26,7 @@ from unrl.config import validate_config
 from unrl.containers import ContextualTransition, ContextualTrajectory
 from unrl.experience_buffer import ExperienceBufferProtocol, ExperienceBuffer, NaivePrioritisedExperienceBuffer, \
     RankPartitionedPrioritisedExperienceBuffer
-from unrl.functions import ActionValueFunction
+from unrl.functions import ActionValueFunction, DuelingActionValueFunction
 from unrl.utils import persisted_generator_value
 
 __all__ = [
@@ -404,3 +404,46 @@ class PrioritisedDoubleDQN(DQNPrioritisedExperienceReplay, _DoubleDQNBase):
             replay_memory_capacity=replay_memory_capacity, batch_size=batch_size, alpha=alpha, beta=beta)
         _DoubleDQNBase.__init__(self)
 
+
+class DuelingDQN(PrioritisedDoubleDQN):
+    """A Deep Q-Network adaptation to requires a two-headed ("Dueling") Value function, outputting both state-value
+    estimates and action advantage values, from which to construct action-value estimates. Bootstrap methods inherently
+    assume all action selections are important. The authors of [1]_ indicate that certain problems have many states
+    where the choice of an action is inconsequential in the immediate future. By decomposing action-value estimates the
+    model shows improved generalisation of learning across actions in such problems.
+
+    References:
+        [1] Wang, Z., Schaul, T., Hessel, M., & et al. (2016). "Dueling network architectures for deep reinforcement
+            learning". In Proceedings of The 33rd International Conference on Machine Learning.
+    """
+    class DuelingActionValueFunctionWrapper:
+        def __init__(self, dueling_action_value_model: DuelingActionValueFunction):
+            self._model = dueling_action_value_model
+
+        def __deepcopy__(self, memodict={}):
+            return deepcopy(self._model)
+
+        def state_dict(self):
+            return self._model.state_dict()
+
+        def __call__(self, *args, **kwargs) -> pt.Tensor:
+            """Compose Action-value estimates from State-value and advantage estimates following eq.9 [1]_."""
+            state_value, advantage = self._model(*args, **kwargs)
+            return state_value + (advantage - advantage.mean(dim=-1))
+
+    def __init__(self,
+                 dueling_action_value_model: DuelingActionValueFunction,
+                 *,
+                 learning_rate: float,
+                 discount_factor: float,
+                 epsilon_greedy: float,
+                 target_refresh_steps: int,
+                 replay_memory_capacity: int,
+                 batch_size: int,
+                 alpha: float,
+                 beta: float):
+        action_value_model = self.DuelingActionValueFunctionWrapper(dueling_action_value_model)
+        super().__init__(
+            action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
+            epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
+            replay_memory_capacity=replay_memory_capacity, batch_size=batch_size, alpha=alpha, beta=beta)

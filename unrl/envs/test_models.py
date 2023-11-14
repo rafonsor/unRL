@@ -21,7 +21,7 @@ from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubl
 from unrl.algos.policy_gradient import Reinforce, BaselineReinforce
 from unrl.algos.ddpg import DDPG, TwinDelayedDDPG, SAC, QSAC
 from unrl.functions import Policy, ContinuousPolicy, GaussianPolicy, ContinuousActionValueFunction, ActionValueFunction, \
-    StateValueFunction
+    StateValueFunction, DuelingActionValueFunction
 
 
 class ExamplePolicy(Policy):
@@ -92,6 +92,24 @@ class ExampleActionValueEstimator(ActionValueFunction):
         x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
         return self.layer3(x)
+
+
+class ExampleDuelingActionValueEstimator(DuelingActionValueFunction):
+    def __init__(self, num_state_dims: int, num_actions: int, hidden_dim: int):
+        super().__init__()
+        self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
+        self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
+        self.layer_state = pt.nn.Linear(hidden_dim, 1)
+        self.layer_advantage = pt.nn.Linear(hidden_dim, num_actions)
+
+    def forward(self, state: pt.Tensor, *, combine: bool = True) -> pt.Tensor | t.Tuple[pt.Tensor, pt.Tensor]:
+        x = F.relu(self.layer1(state))
+        x = F.relu(self.layer2(x))
+        state_value = self.layer_state(x)
+        advantages = self.layer_advantage(x)
+        if not combine:
+            return state_value, advantages
+        return state_value + advantages
 
 
 class ExampleContinuousActionValueEstimator(ContinuousActionValueFunction):
