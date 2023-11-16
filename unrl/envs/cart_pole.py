@@ -17,7 +17,7 @@ import gymnasium as gym
 import torch as pt
 
 import unrl.types as t
-from unrl.containers import Trajectory
+from unrl.containers import SARSTrajectory
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def make_cart_pole(human: bool = False) -> t.Tuple[gym.Env, int, int, t.Callable
     return env, num_state_dims, num_actions, transform
 
 
-def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> t.Tuple[Trajectory, float]:
+def run_episode(env: gym.Env, transform: t.Callable[[t.NDArray], pt.Tensor]) -> t.Tuple[SARSTrajectory, float]:
     observation, _ = env.reset()
     state = transform(observation)
     terminated = truncated = False

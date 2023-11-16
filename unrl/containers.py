@@ -19,7 +19,7 @@ import unrl.types as t
 
 
 @dataclass
-class Transition:
+class SARSTransition:
     state: pt.Tensor
     action: t.IntLike
     reward: t.FloatLike
@@ -30,12 +30,18 @@ class Transition:
 
 
 @dataclass
-class ContextualTransition(Transition):
+class ContextualTransition(SARSTransition):
     terminates: bool
 
 
-Trajectory: t.TypeAlias = t.Sequence[Transition]
+@dataclass
+class Transition(ContextualTransition):
+    logits: pt.Tensor = None
+
+
+SARSTrajectory: t.TypeAlias = t.Sequence[SARSTransition]
 ContextualTrajectory: t.TypeAlias = t.Sequence[ContextualTransition]
+Trajectory: t.TypeAlias = t.Sequence[Transition]
 
 
 # TODO: Improvement (2023-10-24)
@@ -66,7 +72,7 @@ class FrozenTrajectory:
         self.__index = list(range(self.__n))
 
     @classmethod
-    def from_trajectory(cls, trajectory: Trajectory) -> "FrozenTrajectory":
+    def from_trajectory(cls, trajectory: SARSTrajectory) -> "FrozenTrajectory":
         n = len(trajectory)
         assert n, "Cannot instantiate a FrozenTrajectory from an empty Trajectory"
         states, actions, rewards, next_states = [], [], [], []

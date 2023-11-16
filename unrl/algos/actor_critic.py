@@ -11,16 +11,21 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from copy import deepcopy
+
 import torch as pt
 import torch.nn.functional as F
 
 import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
-from unrl.basic import onestep_td_error, entropy, mse
+from unrl.basic import onestep_td_error, entropy, mse, expected_value
 from unrl.config import validate_config
-from unrl.containers import Transition, Trajectory, FrozenTrajectory, ContextualTrajectory, ContextualTransition
-from unrl.functions import Policy, StateValueFunction
-from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper, KFACOptimizer
+from unrl.containers import SARSTransition, SARSTrajectory, FrozenTrajectory, ContextualTrajectory, \
+    ContextualTransition, Transition, Trajectory
+from unrl.experience_buffer import TrajectoryExperienceBuffer
+from unrl.functions import Policy, StateValueFunction, ActionValueFunction
+from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper, KFACOptimizer, polyak_averaging_inplace, \
+    multi_optimiser_guard
 from unrl.utils import persisted_generator_value
 
 __all__ = [
@@ -29,6 +34,7 @@ __all__ = [
     "AdvantageActorCritic",
     "A2C",
     "ICM",
+    "DiscreteACER"
 ]
 
 
@@ -67,7 +73,7 @@ class ActorCritic:
     def optimise_online(
         self,
         starting_state: pt.Tensor,
-    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[SARSTrajectory, float]]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
@@ -115,7 +121,7 @@ class ActorCritic:
             self._optim_values.step()
 
             # Save transition
-            episode.append(Transition(state, action.type(pt.int), reward, next_state))
+            episode.append(SARSTransition(state, action.type(pt.int), reward, next_state))
 
             I *= self.discount_factor
             state = next_state
@@ -172,7 +178,7 @@ class EligibilityTraceActorCritic:
     def optimise_online(
         self,
         starting_state: pt.Tensor,
-    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[SARSTrajectory, float]]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
@@ -216,7 +222,7 @@ class EligibilityTraceActorCritic:
             self._optim_values.step()
 
             # Save transition
-            episode.append(Transition(state, action.type(pt.int), reward, next_state))
+            episode.append(SARSTransition(state, action.type(pt.int), reward, next_state))
             state = next_state
 
         self._optim_policy.episode_reset()
@@ -308,7 +314,7 @@ class AdvantageActorCritic:
     def optimise_online(
         self,
         starting_state: pt.Tensor,
-    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[SARSTrajectory, float]]:
         """Optimise policy and state-value function online for one episode.
 
         Args:
@@ -485,7 +491,7 @@ class ICM:
     def optimise_online(
         self,
         starting_state: pt.Tensor,
-    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[SARSTrajectory, float]]:
         """Optimise policy, state-value function, and world models online for one episode.
 
         Args:
@@ -564,3 +570,183 @@ class ACKTR(AdvantageActorCritic):
         self._optim_values = KFACOptimizer(self.policy, trust_region_radius=trust_region_radius,
                                            learning_rate=learning_rate_values, max_learning_rate=learning_rate_values)
         self._stepper = multi_optimiser_stepper(self._optim_policy, self._optim_values)
+
+
+class DiscreteACER:
+    """Sample Efficient Actor-Critic with Experience Replay is a flexible Off-Policy algorithm proposed in [1]_ for
+    discrete and continuous Action spaces. ACER builds on the ideas of TRPO ([2]_) and dueling Q-networks ([3]_) adapted
+    for Actor-Critic settings. However, "DiscreteACER" specifically implements support for discrete Action spaces only
+    by following Algorithm 2 of [1]_ to the letter. Importantly, there is no necessity to use a Stochastic Dueling
+    Action-value Function (see Appendix A [1]_).
+
+    References:
+        [1] Wang, Z., Bapst, V., Heess, N., & et al. (2016). "Sample efficient actor-critic with experience replay".
+            arXiv:1611.01224. (Accepted as a poster in ICLR 2017.)
+        [2] Schulman, J., Levine, S., Abbeel, & et al. (2015). "Trust region policy optimization". In Proceedings of The
+            32nd International Conference on Machine Learning.
+        [3] Wang, Z., Schaul, T., Hessel, M., & et al. (2016). "Dueling network architectures for deep reinforcement
+         learning". In Proceedings of The 33rd International Conference on Machine Learning.
+    """
+    def __init__(self,
+                 policy: Policy,
+                 action_value_model: ActionValueFunction,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 discount_factor: float,
+                 polyak_factor: float,
+                 importance_weight_truncation: float,
+                 trust_region_radius: float,
+                 replay_memory_capacity: int,
+                 replay_rate: float,
+                 ):
+        validate_config(learning_rate_policy, "learning_rate_policy", "unitpositive")
+        validate_config(learning_rate_values, "learning_rate_values", "unitpositive")
+        validate_config(discount_factor, "discount_factor", "unitpositive")
+        validate_config(polyak_factor, "polyak_factor", "unitpositive")
+        validate_config(importance_weight_truncation, "importance_weight_truncation", "unitpositive")
+        validate_config(trust_region_radius, "trust_region_radius", "positive")
+        validate_config(replay_memory_capacity, "replay_memory_capacity", "positive")
+        validate_config(replay_rate, "replay_rate", "nonnegative")
+
+        self.policy = policy
+        self.average_policy = deepcopy(policy)
+        self.action_value_model = action_value_model
+        self.learning_rate_policy = learning_rate_policy
+        self.learning_rate_values = learning_rate_values
+        self.discount_factor = discount_factor
+        self.polyak_factor = polyak_factor
+        self.importance_weight_truncation = importance_weight_truncation
+        self.trust_region_radius = trust_region_radius
+        self.replay_rate = replay_rate
+
+        self.sampler = make_sampler(ActionSamplingMode.STOCHASTIC)
+        self._replay_size_sampler = pt.Poisson(pt.Tensor((replay_rate,)))
+        self._experience_buffer = TrajectoryExperienceBuffer(maxlen=replay_memory_capacity)
+        self._optim_policy = pt.optim.SGD(self.policy.parameters(), lr=learning_rate_policy)
+        self._optim_values = pt.optim.SGD(self.action_value_model.parameters(), lr=learning_rate_values)
+
+    def optimise_batch(self, episodes: t.Sequence[Trajectory]) -> float:
+        return sum(self.optimise(episode) for episode in episodes) / len(episodes)
+
+    def optimise(self, episode: Trajectory) -> float:
+        return self._acer(episode)
+
+    @persisted_generator_value
+    def optimise_online(
+        self,
+        starting_state: pt.Tensor,
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[Trajectory, float]]:
+        """Optimise Policy and Action-value function online for one on-policy episode and "n" off-policy episodes. The
+        number of off-policy episodes is determined through Poisson sampling as configured by "_replay_size_sampler".
+
+        Args:
+            starting_state:
+                State from which to begin the episode.
+
+        Yields:
+            Action chosen by policy for the current state.
+
+        Receives:
+            Tuple (reward, successor, terminal, stop) containing the reward obtained by applying the action yielded, the
+            resulting successor state, and whether this state is terminal. And, finally, an indication of whether to
+            stop irrespective of the ending up in a terminal state.
+
+        Returns:
+            A tuple (trajectory, average_loss) containing the trajectory of the full episode and the average TD-error.
+        """
+        episode = []
+        state = starting_state
+        stop = False
+        while not stop:
+            logprobs: pt.Tensor = self.policy(state)
+            action = self.sampler.sample(logprobs)
+            reward, next_state, terminal, stop = yield action
+            # Save transition
+            episode.append(Transition(state, action.type(pt.int), reward, next_state, terminal, logprobs.detach()))
+            state = next_state
+        onpolicy_loss = self._acer(episode, on_policy=True)
+
+        # store episode in buffer
+        self._experience_buffer.append(episode)
+
+        # Sample "n" trajectories to train as off-policy episodes
+        n = self._replay_size_sampler.sample().item()
+        offpolicy_loss = self.optimise_minibatch(n)
+
+        total_loss = (onpolicy_loss + n*offpolicy_loss) / (n + 1)
+        return episode, total_loss
+
+    def optimise_minibatch(self, batch_size: int) -> float:
+        episodes, _ = self._experience_buffer.sample(batch_size)
+        return self.optimise_batch(episodes)
+
+    def _acer(self, trajectory: Trajectory, on_policy: bool = False) -> float:
+        with multi_optimiser_guard(self._optim_policy, self._optim_values):
+            episode_loss = self._acer_innerloop(trajectory, on_policy=on_policy)
+        polyak_averaging_inplace([self.average_policy, self.policy], [self.polyak_factor, 1 - self.polyak_factor])
+        return episode_loss
+
+    def _acer_innerloop(self, trajectory: Trajectory, on_policy: bool) -> float:
+        running_policy_loss = 0
+        running_values_loss = 0
+        # Initialise retraced Q-value
+        last_transition = trajectory[-1]
+        if last_transition.terminates:
+            retraced_action_value = 0
+        else:
+            action_values = self.action_value_model(last_transition.state, combine=True)
+            logprobs = self.policy(last_transition.state)
+            retraced_action_value = expected_value(action_values, logits=logprobs)
+            del action_values, logprobs
+        del last_transition
+
+        for transition in trajectory[::-1]:
+            state, action, reward, next_state, terminal, behaviour_logprobs = transition
+            logprobs = behaviour_logprobs if on_policy else self.policy(state)
+            average_logprobs = self.average_policy(state)
+            action_values = self.action_value_model(state)
+
+            retraced_action_value = reward + self.discount_factor * retraced_action_value
+            # Note, ACER for discrete Action spaces as defined in [1]_'s Algorithm 2 does not use state-value estimates
+            # from the Dueling Action-value function. It computes instead, an expectation of action-value estimates over
+            # the action distribution given by the latest policy.
+            state_value = expected_value(action_values, logits=logprobs)
+
+            # Unlike for continuous Action spaces, importance weights here are not scaled by the inverse dimensionality
+            # of the Action space.
+            importance_weight = logprobs[action].exp() / behaviour_logprobs[action].exp()
+            truncated_importance_weight = min(self.importance_weight_truncation, importance_weight)
+            bounded_importance_weights = pt.clip(
+                1 - (self.importance_weight_truncation * behaviour_logprobs) / logprobs, min=0)
+
+            # Compute Trust Region quantities. Note "g" and "k" must still be derived wrt Policy to constrain updates.
+            g = (
+                truncated_importance_weight * logprobs[action] * (retraced_action_value - state_value)
+                + (bounded_importance_weights * logprobs.exp() * logprobs * (action_values - state_value)).sum(dim=-1)
+            )
+            k = pt.kl_div(average_logprobs, logprobs, log_target=True)
+            running_policy_loss += g.item() + k.item()
+
+            # Compute Action-value function loss
+            delta = (retraced_action_value - action_values[action])
+            loss_values = delta ** 2
+            running_values_loss += loss_values.item()
+
+            # Accumulate gradients
+            self._commit_policy_gradients(g, k)
+            loss_values.backward()
+
+            retraced_action_value = min(1, importance_weight) * delta + state_value
+        return running_policy_loss + running_values_loss
+
+    def _commit_policy_gradients(self, g, k):
+        ggrads = pt.autograd.grad(g, self.policy.parameters())
+        kgrads = pt.autograd.grad(k, self.policy.parameters())
+        with pt.no_grad():
+            for param, dg, dk in zip(self.policy.parameters(), ggrads, kgrads):
+                # Bound all gradients to Trust Region
+                grad = dg - max(0, (dk.T @ dg - self.trust_region_radius) / pt.linalg.norm(dk) ** 2)
+                if param.grad is None:
+                    param.grad = grad
+                else:
+                    param.grad += grad

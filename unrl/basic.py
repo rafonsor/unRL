@@ -88,3 +88,8 @@ def onestep_td_error(discount_factor: t.FloatLike,
 def mse(error: pt.Tensor) -> pt.Tensor:
     """Return the mean square of an error tensor"""
     return (error ** 2).mean()
+
+
+def expected_value(values: pt.Tensor, logits: pt.Tensor) -> pt.Tensor:
+    """Expected value for a discrete distribution"""
+    return (logits.exp() * values).sum(dim=-1)

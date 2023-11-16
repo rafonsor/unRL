@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import contextlib
 import warnings
 from dataclasses import dataclass
 from functools import update_wrapper
@@ -203,6 +204,16 @@ def multi_optimiser_stepper(*optimisers: pt.optim.Optimizer) -> t.Callable[[pt.T
         for optim in optimisers:
             optim.step()
     return stepper
+
+
+@contextlib.contextmanager
+def multi_optimiser_guard(*optimisers: pt.optim.Optimizer) -> t.Generator[None, None, None]:
+    """Manages gradients zeroing and stepping for one or more optimisers while ceding control their backpropagation."""
+    for optim in optimisers:
+        optim.zero_grad()
+    yield
+    for optim in optimisers:
+        optim.step()
 
 
 def polyak_averaging_inplace(models: t.Sequence[pt.nn.Module], weights: t.Sequence[float]):

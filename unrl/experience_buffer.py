@@ -18,10 +18,11 @@ import torch as pt
 
 import unrl.types as t
 from unrl.config import validate_config
-from unrl.containers import ContextualTransition
+from unrl.containers import ContextualTransition, Trajectory
 from unrl.utils import optional_lock
 
 IndexedSARSTBatch: t.TypeAlias = t.Tuple[t.Dict[str, pt.Tensor], t.Dict[str, pt.Tensor]]
+IndexedTrajectoryBatch: t.TypeAlias = t.Tuple[t.List[Trajectory], t.Dict[str, pt.Tensor]]
 
 
 def _extract_batch_from_indices(container: t.Sequence[t.SARST | ContextualTransition],
@@ -104,14 +105,6 @@ class ExperienceBuffer(deque, ExperienceBufferProtocol):
             raise RuntimeError("Cannot sample from an empty ExperienceBuffer")
         indices = pt.randint(0, len(self), (n,))
         batch = _extract_batch_from_indices(self, indices)
-        # states, actions, rewards, next_states, terminations = zip(*[self[idx.item()] for idx in indices])
-        # batch = {
-        #     "states": pt.stack(states),
-        #     "actions": pt.stack(actions)[:, None],  # Expand to shape (BatchSize, 1)
-        #     "rewards": pt.Tensor(rewards),
-        #     "next_states": pt.stack(next_states),
-        #     "terminations": pt.Tensor(terminations),
-        # }
         return batch, {"indices": indices}
 
 
@@ -336,3 +329,26 @@ class RankPartitionedPrioritisedExperienceBuffer(NaivePrioritisedExperienceBuffe
         batch = _extract_batch_from_indices(self._transitions, indices, container_mutex=self._mutex)
         metadata = {"indices": indices, "probabilities": self.__probs[indices].detach(), "partitions": partitions}
         return batch, metadata
+
+
+class TrajectoryExperienceBuffer(deque, ExperienceBufferProtocol):
+    def sample(self, n: int) -> IndexedTrajectoryBatch:
+        """Sample one or more experienced state transitions of the SARST form (with a termination flag relative to the
+        next state). Sampling is with replacement.
+
+        Args:
+            n: number of transitions to retrieve.
+
+        Raises:
+            RuntimeError: attempting to sample from an empty buffer.
+
+        Returns:
+            A tuple (batch, sampling metadata) containing a collection of SARST transitions and a metadata dictionary
+            from the sampling process that includes the sampled indices. Transitions are merged into a dictionary of
+            stacked tensors for each type of transition value.
+        """
+        if len(self) == 0:
+            raise RuntimeError("Cannot sample from an empty ExperienceBuffer")
+        indices = pt.randint(0, len(self), (n,))
+        batch = [self[idx] for idx in indices]
+        return batch, {"indices": indices}
