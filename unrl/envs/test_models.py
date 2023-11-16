@@ -30,7 +30,7 @@ class ExamplePolicy(Policy):
         self.layer1 = pt.nn.Linear(num_state_dims, hidden_dim)
         self.layer2 = pt.nn.Linear(hidden_dim, hidden_dim)
         self.layer3 = pt.nn.Linear(hidden_dim, num_actions)
-        self.logsm = pt.nn.LogSoftmax(0)
+        self.logsm = pt.nn.LogSoftmax(-1)
 
     def forward(self, state: pt.Tensor) -> pt.Tensor:
         x = F.relu(self.layer1(state))
