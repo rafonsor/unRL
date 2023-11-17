@@ -410,7 +410,7 @@ class SAC:
         self.__steps = 0
 
     def sample_action(self, state: pt.Tensor, noisy: bool = False) -> t.Tuple[pt.Tensor, pt.Tensor]:
-        dist = self._build_policy_distribution(state)
+        dist = self.policy(state, dist=True)
         if noisy:
             action = dist.sample(state.shape[0])
             logprob = dist.log_prob(action)
@@ -419,11 +419,6 @@ class SAC:
             action = F.tanh(unbounded_action)
             logprob = dist.log_prob(unbounded_action) - pt.log(1 - action ** 2 + self.eps)
         return action, logprob
-
-    def _build_policy_distribution(self, state: pt.Tensor) -> pt.distributions.Distribution:
-        """Return a distribution parameterised by a variational Policy"""
-        mu, sigma = self.policy(state)
-        return pt.distributions.Normal(mu, sigma)
 
     @persisted_generator_value
     def optimise_online(
@@ -559,7 +554,6 @@ class QSAC:
         self._stepper = multi_optimiser_stepper(self._optim_policy, self._optim_actions, self._optim_actions_twin)
         self.__steps = 0
 
-    _build_policy_distribution = SAC._build_policy_distribution
     sample_action = SAC.sample_action
     optimise_online = SAC.optimise_online
 

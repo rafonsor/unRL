@@ -60,11 +60,13 @@ class ExampleGaussianPolicy(GaussianPolicy):
         self.layer_sigma = pt.nn.Linear(hidden_dim, num_action_dims * num_action_dims)
         self.num_action_dims = num_action_dims
 
-    def forward(self, state: pt.Tensor) -> t.Tuple[pt.Tensor, pt.Tensor]:
+    def forward(self, state: pt.Tensor, *, dist: bool = False) -> t.Tuple[pt.Tensor, pt.Tensor] | pt.distributions.Normal:
         x = F.relu(self.layer1(state))
         x = F.relu(self.layer2(x))
         mu = self.layer_mu(x)
         sigma = F.relu(self.layer_sigma(x)).reshape(self.num_action_dims, self.num_action_dims)
+        if dist:
+            return self.distribution(mu, sigma)
         return mu, sigma
 
 
