@@ -35,7 +35,8 @@ __all__ = [
     "AdvantageActorCritic",
     "A2C",
     "ICM",
-    "DiscreteACER"
+    "DiscreteACER",
+    "ACER"
 ]
 
 

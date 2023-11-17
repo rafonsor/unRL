@@ -11,19 +11,18 @@ The path forward:
 - [x] A2C: [Advantage Actor-Critic](unrl/algos/actor_critic.py)
 - [x] ACER: [Sample Efficient Actor-Critic with Experience Replay](https://arxiv.org/pdf/1611.01224.pdf)
 - [x] ACKTR: [Actor Critic using Kronecker-Factored Trust Region](https://arxiv.org/abs/1708.05144)
-- [ ] Continual PPO: [Loss of Plasticity in Deep Continual Learning](https://arxiv.org/pdf/2306.13812.pdf)
-  - In Appendix E
-  - Paper unveils "continual backpropagation": proposes tracking Utility of activation units to guide parameter re-initialisation
 - [x] DQN: [Deep Q-Network](unrl/algos/dqn.py)
   - [x] DDQN: [Double Deep Q-Network](unrl/algos/dqn.py)
+  - [x] DuelingDQN: [Dueling Deep Q-Network](unrl/algos/dqn.py)
+  - [ ] h-DQN: [Hierarchical-DQN: Integrating Temporal Abstraction and Intrinsic Motivation](https://proceedings.neurips.cc/paper_files/paper/2016/file/f442d33fa06832082290ad8544a8da27-Paper.pdf)
   - [x] PER-DQN: [Double Deep Q-Network with Prioritized Experience Replay](unrl/algos/dqn.py)
   - [ ] Rainbow DQN: [Rainbow: Combining Improvements in Deep Reinforcement Learning](https://arxiv.org/pdf/1710.02298)
 - [x] DDPG: [Deep Deterministic Policy Gradient](unrl/algos/ddpg.py)
+  - [x] TD3: [Twin-Delayed Deep Deterministic Policy Gradient](unrl/algos/ddpg.py)
 - [ ] FuNs: [Feudal Networks for Hierarchical Reinforcement Learning](http://proceedings.mlr.press/v70/vezhnevets17a.html)
 - [ ] GAE: [High-Dimensional Continuous Control Using Generalized Advantage Estimation](https://arxiv.org/abs/1506.02438)
 - [ ] GAIL: [Generative Adversarial Imitation Learning](https://arxiv.org/pdf/1606.03476.pdf)
 - [ ] GCL: [Guided Cost Learning: Deep Inverse Optimal Control via Policy Optimization](https://proceedings.mlr.press/v48/finn16.html)
-- [ ] h-DQN: [Hierarchical-DQN: Integrating Temporal Abstraction and Intrinsic Motivation](https://proceedings.neurips.cc/paper_files/paper/2016/file/f442d33fa06832082290ad8544a8da27-Paper.pdf)
 - [ ] HER: [Hindsight Experience Replay](https://arxiv.org/pdf/1707.01495.pdf)
 - [ ] IMPALA: [Importance weighted Actor-Learner Architectures](http://proceedings.mlr.press/v80/espeholt18a.html)
 - [ ] NAF: [Normalised Advantage Functions](https://arxiv.org/pdf/1603.00748.pdf)
@@ -31,11 +30,13 @@ The path forward:
 - [ ] OK: [The option keyboard: Combining skills in reinforcement learning](https://proceedings.neurips.cc/paper_files/paper/2019/hash/251c5ffd6b62cc21c446c963c76cf214-Abstract.html)
 - [ ] Option-Critic: [The Option-Critic Architecture](https://ojs.aaai.org/index.php/AAAI/article/view/10916)
 - [x] PPO: [Proximal Policy Optimization](unrl/algos/policy_gradient.py)
+  - [ ] Continual PPO: [Loss of Plasticity in Deep Continual Learning](https://arxiv.org/pdf/2306.13812.pdf)
+    - In Appendix E
+    - Paper unveils "continual backpropagation": proposes tracking Utility of activation units to guide parameter re-initialisation
+  - [x] TRPO: [Trust-Region Policy Optimization](unrl/algos/policy_gradient.py)
 - [x] REINFORCE: [REINFORCE](unrl/algos/policy_gradient.py)
   - [x] Baseline: [REINFORCE with State-Value Baseline](unrl/algos/policy_gradient.py)
 - [x] SAC: [Soft Actor-Critic](unrl/algos/ddpg.py)
-- [x] TD3: [Twin-Delayed Deep Deterministic Policy Gradient](unrl/algos/ddpg.py)
-- [x] TRPO: [Trust-Region Policy Optimization](unrl/algos/policy_gradient.py)
 
 
 ## Model-Based
