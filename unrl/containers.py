@@ -36,7 +36,8 @@ class ContextualTransition(SARSTransition):
 
 @dataclass
 class Transition(ContextualTransition):
-    logits: pt.Tensor = None
+    logits: t.Optional[pt.Tensor] = None
+    dist: t.Optional[pt.distributions.Distribution] = None
 
 
 SARSTrajectory: t.TypeAlias = t.Sequence[SARSTransition]

@@ -18,12 +18,13 @@ import torch.nn.functional as F
 
 import unrl.types as t
 from unrl.action_sampling import ActionSampler, make_sampler, ActionSamplingMode
-from unrl.basic import onestep_td_error, entropy, mse, expected_value
+from unrl.basic import onestep_td_error, entropy, mse, expected_value, rho_dists, rho_logits
 from unrl.config import validate_config
 from unrl.containers import SARSTransition, SARSTrajectory, FrozenTrajectory, ContextualTrajectory, \
     ContextualTransition, Transition, Trajectory
 from unrl.experience_buffer import TrajectoryExperienceBuffer
-from unrl.functions import Policy, StateValueFunction, ActionValueFunction
+from unrl.functions import Policy, StateValueFunction, ActionValueFunction, DuelingContinuousActionValueFunction, \
+    GaussianPolicy
 from unrl.optim import EligibilityTraceOptimizer, multi_optimiser_stepper, KFACOptimizer, polyak_averaging_inplace, \
     multi_optimiser_guard
 from unrl.utils import persisted_generator_value
@@ -714,7 +715,7 @@ class DiscreteACER:
 
             # Unlike for continuous Action spaces, importance weights here are not scaled by the inverse dimensionality
             # of the Action space.
-            importance_weight = logprobs[action].exp() / behaviour_logprobs[action].exp()
+            importance_weight = rho_logits(logprobs, behaviour_logprobs, action)
             truncated_importance_weight = min(self.importance_weight_truncation, importance_weight)
             bounded_importance_weights = pt.clip(
                 1 - (self.importance_weight_truncation * behaviour_logprobs) / logprobs, min=0)
@@ -750,3 +751,95 @@ class DiscreteACER:
                     param.grad = grad
                 else:
                     param.grad += grad
+
+
+class ACER(DiscreteACER):
+    """Sample Efficient Actor-Critic with Experience Replay is a flexible Off-Policy algorithm, here implemented for
+    continuous Action spaces parameterised as a Gaussian distribution. Builds on the ideas of TRPO ([2]_) and dueling
+    Q-networks ([3]_) adapted for Actor-Critic settings.
+
+    References:
+        [1] Wang, Z., Bapst, V., Heess, N., & et al. (2016). "Sample efficient actor-critic with experience replay".
+            arXiv:1611.01224. (Accepted as a poster in ICLR 2017.)
+        [2] Schulman, J., Levine, S., Abbeel, & et al. (2015). "Trust region policy optimization". In Proceedings of The
+            32nd International Conference on Machine Learning.
+        [3] Wang, Z., Schaul, T., Hessel, M., & et al. (2016). "Dueling network architectures for deep reinforcement
+            learning". In Proceedings of The 33rd International Conference on Machine Learning.
+    """
+    def __init__(self,
+                 policy: GaussianPolicy,
+                 action_value_model: DuelingContinuousActionValueFunction,
+                 learning_rate_policy: float,
+                 learning_rate_values: float,
+                 discount_factor: float,
+                 polyak_factor: float,
+                 importance_weight_truncation: float,
+                 trust_region_radius: float,
+                 replay_memory_capacity: int,
+                 replay_rate: float,
+                 num_action_samples: int,
+                 ):
+        super().__init__(policy, action_value_model, learning_rate_policy, learning_rate_values, discount_factor,
+                         polyak_factor, importance_weight_truncation, trust_region_radius, replay_memory_capacity,
+                         replay_rate)
+        validate_config(num_action_samples, "num_action_samples", "positive")
+        self.num_action_samples = num_action_samples
+
+    def _acer_innerloop(self, trajectory: Trajectory, on_policy: bool) -> float:
+        running_policy_loss = 0
+        running_values_loss = 0
+        # Initialise retraced Q-value
+        last_transition = trajectory[-1]
+        if last_transition.terminates:
+            retraced_action_value = 0
+        else:
+            state_value, _ = self.action_value_model(last_transition.state, combine=False)
+            retraced_action_value = state_value.detach()
+            del state_value
+        del last_transition
+        corrected_action_value = retraced_action_value
+
+        for transition in trajectory[::-1]:
+            retraced_action_value = transition.reward + self.discount_factor * retraced_action_value
+            corrected_action_value = transition.reward + self.discount_factor * corrected_action_value
+
+            # Retrieve state- and action-value estimates for original action
+            dist = transition.dist if on_policy else self.policy(transition.state, dist=True)
+            stochastic_actions = pt.split(dist.sample(pt.Size((self.num_action_samples,))), self.num_action_samples)
+            state_value, advantage, expected = self.action_value_model(transition.state, transition.action,
+                                                                       stochastic_actions, combine=False)
+            stochastic_action_value = state_value + advantage - expected
+            del advantage, expected
+            # Compute action-value estimate for a newly sampled action
+            new_action = dist.sample()
+            stochastic_new_action_value = self.action_value_model(transition.state, new_action, stochastic_actions)
+            del stochastic_actions
+
+            # Compute all importance weights for original action and newly sampled action.
+            rho = rho_dists(dist, transition.dist, transition.action)
+            bounded_rho = min(1, rho)
+            truncated_rho = min(self.importance_weight_truncation, rho)
+            new_rho = rho_dists(dist, transition.dist, new_action)
+            truncated_new_rho = max(0, 1 - (self.importance_weight_truncation / new_rho))
+
+            # Compute Trust Region quantities. Note "g" and "k" must still be derived wrt Policy to constrain updates.
+            g = (
+                truncated_rho * dist.log_prob(transition.action) * (corrected_action_value - state_value)
+                + truncated_new_rho * dist.log_prob(new_action) * (stochastic_new_action_value - state_value)
+            )
+            k = pt.distributions.kl_divergence(self.average_policy(transition.state, dist=True), dist)
+            running_policy_loss += g.item() + k.item()
+
+            # Compute Action-value function loss
+            delta = (retraced_action_value - stochastic_action_value).detach()
+            loss_values = delta * stochastic_action_value + bounded_rho * delta * state_value
+            running_values_loss += loss_values.item()
+
+            # Accumulate gradients
+            self._commit_policy_gradients(g, k)
+            loss_values.backward()
+
+            # With continuous Action spaces, the retraced value scales importance weights by Action space dimension.
+            retraced_action_value = bounded_rho ** (1 / transition.action.numel()) * delta + state_value
+            corrected_action_value = corrected_action_value - stochastic_action_value + state_value
+        return running_policy_loss + running_values_loss

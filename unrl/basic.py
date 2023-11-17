@@ -93,3 +93,15 @@ def mse(error: pt.Tensor) -> pt.Tensor:
 def expected_value(values: pt.Tensor, logits: pt.Tensor) -> pt.Tensor:
     """Expected value for a discrete distribution"""
     return (logits.exp() * values).sum(dim=-1)
+
+
+def rho_logits(target: pt.Tensor, behaviour: pt.Tensor, action: t.IntLike) -> pt.Tensor:
+    """Calculate the importance weight ratio between target and behaviour log-probabilities for a given action"""
+    return (target[action].exp() / behaviour[action].exp()).detach()
+
+
+def rho_dists(target: pt.distributions.Distribution,
+              behaviour: pt.distributions.Distribution,
+              action: pt.Tensor) -> pt.Tensor:
+    """Calculate the importance weight ratio between target and behaviour distributions for a given action"""
+    return (target.log_prob(action).exp() / behaviour.log_prob(action).exp()).detach()

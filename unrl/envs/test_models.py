@@ -21,7 +21,7 @@ from unrl.algos.dqn import DQN, DQNExperienceReplay, DoubleDQN, PrioritisedDoubl
 from unrl.algos.policy_gradient import Reinforce, BaselineReinforce
 from unrl.algos.ddpg import DDPG, TwinDelayedDDPG, SAC, QSAC
 from unrl.functions import Policy, ContinuousPolicy, GaussianPolicy, ContinuousActionValueFunction, ActionValueFunction, \
-    StateValueFunction, DuelingActionValueFunction
+    StateValueFunction, DuelingActionValueFunction, DuelingContinuousActionValueFunction
 
 
 class ExamplePolicy(Policy):
@@ -127,6 +127,43 @@ class ExampleContinuousActionValueEstimator(ContinuousActionValueFunction):
         x2 = F.relu(self.layer_action(action))
         x = F.relu(self.layer2(x1 + x2))
         return self.layer3(x)
+
+
+class ExampleDuelingContinuousActionValueEstimator(DuelingContinuousActionValueFunction):
+    def __init__(self, num_state_dims: int, num_action_dims: int, hidden_dim: int):
+        super().__init__()
+        self.layer_state = pt.nn.Linear(num_state_dims, hidden_dim)
+        self.layer_action = pt.nn.Linear(num_action_dims, hidden_dim)
+        self.layer_action2 = pt.nn.Linear(hidden_dim, hidden_dim)
+        self.layer_state_value = pt.nn.Linear(hidden_dim, 1)
+        self.layer_advantage = pt.nn.Linear(hidden_dim, 1)
+
+    def forward(self,
+                state: pt.Tensor,
+                action: pt.Tensor,
+                stochastic_actions: t.Optional[t.List[pt.Tensor]] = None,
+                *,
+                combine: bool = True
+                ) -> pt.Tensor | t.Tuple[pt.Tensor, pt.Tensor, t.Optional[pt.Tensor]]:
+        embedded_state = F.relu(self.layer_state(state))
+        state_value = self.layer_state(embedded_state)
+        advantage = self._compute_advantage(embedded_state, action)
+
+        if stochastic_actions is not None:
+            expected_advantage = sum(
+                self._compute_advantage(embedded_state, a) for a in stochastic_actions) / len(stochastic_actions)
+            if not combine:
+                return state_value, advantage, expected_advantage
+            return state_value + advantage - expected_advantage
+
+        if not combine:
+            return state_value, advantage, None
+        return state_value + advantage
+
+    def _compute_advantage(self, embedded_state: pt.Tensor, action: pt.Tensor) -> pt.Tensor:
+        embedded_action = F.relu(self.layer_action(action))
+        x = F.relu(self.layer_action2(embedded_state + embedded_action))
+        return self.layer_advantage(x)
 
 
 def prepare_game_model_reinforce(num_state_dims: int, num_actions: int, baseline: bool = False) -> Reinforce:
