@@ -130,7 +130,7 @@ class DuelingContinuousActionValueFunction(pt.nn.Module):
             state: State.
             action: action to provide an estimation for.
             stochastic_actions: (Optional) actions from which to compute an action-advantage expectation to subtract
-                                from the
+                                from the value estimate.
             combine: when "True", returns action-value estimates by directly summing state-value and action advantage
                      estimates.
 
