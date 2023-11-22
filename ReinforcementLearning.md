@@ -11,6 +11,7 @@ The path forward:
 - [x] A2C: [Advantage Actor-Critic](unrl/algos/actor_critic.py)
 - [x] ACER: [Sample Efficient Actor-Critic with Experience Replay](https://arxiv.org/pdf/1611.01224.pdf)
 - [x] ACKTR: [Actor Critic using Kronecker-Factored Trust Region](https://arxiv.org/abs/1708.05144)
+- [ ] AQT: [Action Q-Transformer](https://arxiv.org/pdf/2306.13879.pdf)
 - [x] DQN: [Deep Q-Network](unrl/algos/dqn.py)
   - [x] DDQN: [Double Deep Q-Network](unrl/algos/dqn.py)
   - [x] DuelingDQN: [Dueling Deep Q-Network](unrl/algos/dqn.py)
@@ -34,6 +35,7 @@ The path forward:
     - In Appendix E
     - Paper unveils "continual backpropagation": proposes tracking Utility of activation units to guide parameter re-initialisation
   - [x] TRPO: [Trust-Region Policy Optimization](unrl/algos/policy_gradient.py)
+- [ ] Q-Transformer: [Scalable Offline Reinforcement Learning via Autoregressive Q-Functions](https://arxiv.org/pdf/2309.10150)
 - [x] REINFORCE: [REINFORCE](unrl/algos/policy_gradient.py)
   - [x] Baseline: [REINFORCE with State-Value Baseline](unrl/algos/policy_gradient.py)
 - [x] SAC: [Soft Actor-Critic](unrl/algos/ddpg.py)
