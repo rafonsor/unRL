@@ -23,7 +23,7 @@ import unrl.types as t
 from unrl.action_sampling import EpsilonGreedyActionSampler, GreedyActionSampler
 from unrl.basic import mse, onestep_td_error
 from unrl.config import validate_config
-from unrl.containers import ContextualTransition, ContextualTrajectory
+from unrl.containers import ContextualTransition, ContextualTrajectory, Trajectory
 from unrl.experience_buffer import ExperienceBufferProtocol, ExperienceBuffer, NaivePrioritisedExperienceBuffer, \
     RankPartitionedPrioritisedExperienceBuffer
 from unrl.functions import ActionValueFunction, DuelingActionValueFunction, NormalisedContinuousAdvantageFunction
@@ -137,9 +137,9 @@ class DQN:
     def _step(self, td: t.FloatLike) -> float:
         """Compute MSE loss from One-step TD-error to backpropagate gradients and update the behaviour model."""
         loss = mse(td)
+        self._optim.zero_grad()
         loss.backward()
         self._optim.step()
-        self._optim.zero_grad()
         return loss.item()
 
 
@@ -471,13 +471,20 @@ class NAF:
         self.behaviour_model = action_value_model
         self.target_model = deepcopy(action_value_model)
         self.discount_factor = discount_factor
-        self.polyak_factor = polyak_factor
+        self.polyak_weights = [1 - polyak_factor, polyak_factor]
 
         self.batch_size = batch_size
         self._experience_buffer = ExperienceBuffer(maxlen=replay_memory_capacity)
 
         self._noise_process = pt.distributions.Normal(0, noise_scale)
         self._optim = SGD(self.behaviour_model.parameters(), lr=learning_rate)
+
+    def optimise(self, episode: Trajectory) -> float:
+        return sum(self._step(self._compute_td_error_transition(transition)) for transition in episode)
+
+    def optimise_batch(self, episodes: t.Sequence[Trajectory]):
+        for episode in episodes:
+            self.optimise(episode)
 
     @persisted_generator_value
     def optimise_online(
@@ -502,21 +509,38 @@ class NAF:
             state = next_state
             self._experience_buffer.append(transition)
 
-            # Sample and compute mini-batch loss
-            batch, _ = self._experience_buffer.sample(self.batch_size)
-            loss = mse(self._compute_td_error_batch(batch))
-            total_loss += loss.item()
-
-            # Backpropagate loss
-            self._optim.zero_grad()
-            loss.backward()
-            self._optim.step()
-
-            # Update target Action-value function. Note [1]_ refreshes the target model every step.
-            polyak_averaging_inplace(
-                [self.target_model, self.behaviour_model], [1 - self.polyak_factor, self.polyak_factor])
+            # Train on a mini-batch
+            total_loss += self.optimise_minibatch(self.batch_size)
 
         return episode, total_loss
+
+    def optimise_minibatch(self, batch_size: int) -> float:
+        # Sample mini-batch and compute TD-errors
+        batch, _ = self._experience_buffer.sample(batch_size)
+        error = self._compute_td_error_batch(batch)
+        loss = self._step(error)
+        self._refresh_target_model()
+        return loss
+
+    _step = DQN._step
+
+    def _refresh_target_model(self):
+        # Update target Action-value function. Note [1]_ refreshes the target model every step.
+        polyak_averaging_inplace([self.target_model, self.behaviour_model], self.polyak_weights)
+
+    def _compute_td_error_transition(self, transition: ContextualTransition) -> pt.Tensor:
+        """Compute One-step TD-error for a single SARST transition.
+
+        Args:
+            transition: a SARST transition.
+
+        Returns:
+            Single-element tensor containing the TD-error for this transition.
+        """
+        action_value = self.behaviour_model(transition.state, transition.action)
+        successor_state_value, _ = self.target_model(transition.next_state, transition.action)
+        return onestep_td_error(
+            self.discount_factor, action_value, transition.reward, successor_state_value, transition.terminates)
 
     def _compute_td_error_batch(self, batch: t.Dict[str, pt.Tensor]) -> pt.Tensor:
         """Compute One-step TD-errors for an entire batch of SARST transitions.
