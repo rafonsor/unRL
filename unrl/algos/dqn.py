@@ -26,7 +26,8 @@ from unrl.config import validate_config
 from unrl.containers import ContextualTransition, ContextualTrajectory
 from unrl.experience_buffer import ExperienceBufferProtocol, ExperienceBuffer, NaivePrioritisedExperienceBuffer, \
     RankPartitionedPrioritisedExperienceBuffer
-from unrl.functions import ActionValueFunction, DuelingActionValueFunction
+from unrl.functions import ActionValueFunction, DuelingActionValueFunction, NormalisedContinuousAdvantageFunction
+from unrl.optim import polyak_averaging_inplace
 from unrl.utils import persisted_generator_value
 
 __all__ = [
@@ -34,7 +35,8 @@ __all__ = [
     "DQNExperienceReplay",
     "DQNPrioritisedExperienceReplay",
     "DoubleDQN",
-    "PrioritisedDoubleDQN"
+    "PrioritisedDoubleDQN",
+    "NAF"
 ]
 
 
@@ -447,3 +449,86 @@ class DuelingDQN(PrioritisedDoubleDQN):
             action_value_model, learning_rate=learning_rate, discount_factor=discount_factor,
             epsilon_greedy=epsilon_greedy, target_refresh_steps=target_refresh_steps,
             replay_memory_capacity=replay_memory_capacity, batch_size=batch_size, alpha=alpha, beta=beta)
+
+
+class NAF:
+    """Continuous Q-learning algorithm with Normalised Advantage Functions, a constrained variation of the Dueling
+    Action-value network architecture in which the advantage term is modeled by a quadratic function of nonlinear
+    features that effectively becomes the learnt Policy.
+
+    References:
+        [1] Gu, S., Lillicrap, T., Sutskever, I., & et al. (2016). "Continuous deep q-learning with model-based
+            acceleration". In Proceedings of The 33rd International Conference on Machine Learning.
+    """
+    def __init__(self,
+                 action_value_model: NormalisedContinuousAdvantageFunction,
+                 discount_factor: float,
+                 learning_rate: float,
+                 noise_scale: float,
+                 replay_memory_capacity: int,
+                 batch_size: int,
+                 polyak_factor: float,):
+        self.behaviour_model = action_value_model
+        self.target_model = deepcopy(action_value_model)
+        self.discount_factor = discount_factor
+        self.polyak_factor = polyak_factor
+
+        self.batch_size = batch_size
+        self._experience_buffer = ExperienceBuffer(maxlen=replay_memory_capacity)
+
+        self._noise_process = pt.distributions.Normal(0, noise_scale)
+        self._optim = SGD(self.behaviour_model.parameters(), lr=learning_rate)
+
+    @persisted_generator_value
+    def optimise_online(
+        self,
+        starting_state: pt.Tensor
+    ) -> t.Generator[t.IntLike, t.Tuple[t.IntLike, pt.Tensor, bool, bool], t.Tuple[ContextualTrajectory, float]]:
+        episode = []
+        total_loss = 0
+        state = starting_state
+        stop = False
+        step = 0
+        while not stop:
+            step += 1
+            action = self.behaviour_model.pick(state)
+            noisy_action = action + self._noise_process.sample(action.shape)
+
+            reward, next_state, terminal, stop = yield noisy_action
+
+            # Store latest transition
+            transition = ContextualTransition(state, noisy_action, reward, next_state, terminal)
+            episode.append(transition)
+            state = next_state
+            self._experience_buffer.append(transition)
+
+            # Sample and compute mini-batch loss
+            batch, _ = self._experience_buffer.sample(self.batch_size)
+            loss = mse(self._compute_td_error_batch(batch))
+            total_loss += loss.item()
+
+            # Backpropagate loss
+            self._optim.zero_grad()
+            loss.backward()
+            self._optim.step()
+
+            # Update target Action-value function. Note [1]_ refreshes the target model every step.
+            polyak_averaging_inplace(
+                [self.target_model, self.behaviour_model], [1 - self.polyak_factor, self.polyak_factor])
+
+        return episode, total_loss
+
+    def _compute_td_error_batch(self, batch: t.Dict[str, pt.Tensor]) -> pt.Tensor:
+        """Compute One-step TD-errors for an entire batch of SARST transitions.
+
+        Args:
+            batch: a collection of SARST transitions sampled from an experience buffer. Each transition element is
+                   batched together as a tensor.
+
+        Returns:
+            Unidimensional tensor of TD-errors
+        """
+        action_values = self.behaviour_model(batch['states'], batch['actions'])
+        successor_state_values, _ = self.target_model(batch['next_states'], batch['actions'])
+        return onestep_td_error(
+            self.discount_factor, action_values, batch['rewards'], successor_state_values, batch['terminations'])

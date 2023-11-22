@@ -25,7 +25,7 @@ The path forward:
 - [ ] GCL: [Guided Cost Learning: Deep Inverse Optimal Control via Policy Optimization](https://proceedings.mlr.press/v48/finn16.html)
 - [ ] HER: [Hindsight Experience Replay](https://arxiv.org/pdf/1707.01495.pdf)
 - [ ] IMPALA: [Importance weighted Actor-Learner Architectures](http://proceedings.mlr.press/v80/espeholt18a.html)
-- [ ] NAF: [Normalised Advantage Functions](https://arxiv.org/pdf/1603.00748.pdf)
+- [x] NAF: [Normalised Advantage Functions](https://arxiv.org/pdf/1603.00748.pdf)
 - [ ] NEC: [Neural Episodic Control](https://proceedings.mlr.press/v70/pritzel17a/pritzel17a.pdf)
 - [ ] OK: [The option keyboard: Combining skills in reinforcement learning](https://proceedings.neurips.cc/paper_files/paper/2019/hash/251c5ffd6b62cc21c446c963c76cf214-Abstract.html)
 - [ ] Option-Critic: [The Option-Critic Architecture](https://ojs.aaai.org/index.php/AAAI/article/view/10916)
