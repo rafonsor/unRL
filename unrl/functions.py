@@ -140,3 +140,25 @@ class DuelingContinuousActionValueFunction(pt.nn.Module):
             `None`.
         """
         ...
+
+
+class NormalisedContinuousAdvantageFunction(DuelingContinuousActionValueFunction):
+    """Action-value function for continuous Action spaces, with two-headed outputs parameterised by a state-based
+    normalised advantage function (NAF, [1]_) that serves as a Policy.
+
+    References:
+        [1] Gu, S., Lillicrap, T., Sutskever, I., & et al. (2016). "Continuous deep q-learning with model-based
+            acceleration". In Proceedings of The 33rd International Conference on Machine Learning.
+    """
+
+    def pick(self, state: pt.Tensor) -> pt.Tensor:
+        """Returns the optimal action as determined by the underlying normalised advantage function parameterising
+        action-value estimates.
+
+        Args:
+            state: State.
+
+        Returns:
+            A tensor with the greedy (continuous) action.
+        """
+        ...
