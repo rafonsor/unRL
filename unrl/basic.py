@@ -82,7 +82,7 @@ def onestep_td_error(discount_factor: t.FloatLike,
     Returns:
         Unidimensional tensor of One-step TD-error depending on the inputs size.
     """
-    return reward + (1 - terminal) * discount_factor * successor_value - value
+    return reward + (1 - terminal) * discount_factor * successor_value.detach() - value
 
 
 def mse(error: pt.Tensor) -> pt.Tensor:

@@ -18,7 +18,7 @@ import torch as pt
 
 import unrl.types as t
 from unrl.action_sampling import make_sampler, ActionSamplingMode
-from unrl.basic import onestep_td_error, entropy
+from unrl.basic import onestep_td_error, entropy, rho_logits
 from unrl.config import validate_config
 from unrl.containers import FrozenTrajectory
 from unrl.functions import Policy, StateValueFunction
@@ -78,7 +78,7 @@ class Reinforce:
     def _calculate_return(self, episode: FrozenTrajectory, offset: int, timestep: int) -> float:
         discount = pt.cumprod(pt.ones((offset + 1,)) * self.discount_factor, 0)
         future_rewards = episode.rewards[timestep:]  # note transition t points to `reward` from time t+1
-        return (discount * future_rewards).sum()
+        return (discount * future_rewards).sum().item()
 
 
 class BaselineReinforce(Reinforce):
@@ -195,7 +195,7 @@ class TRPO(Reinforce):
             logprobs_b = self.policy(state)
 
             # Importance sampling weight
-            rho = logprobs[action] / logprobs_b[action]
+            rho = rho_logits(logprobs, logprobs_b, action)
 
             # n-step Advantage estimate
             nae = advantages[timestep:] * discounts[:-offset]
@@ -268,7 +268,7 @@ class SimplifiedPPO(Reinforce):
             logprobs_b = self.policy(state)
 
             advantage = onestep_td_error(self.discount_factor, estimate, reward, next_state_estimate, terminal)
-            rho = logprobs[action] / logprobs_b[action]
+            rho = rho_logits(logprobs, logprobs_b, action)
 
             # Note: minimisation coupled with clipping ensures loss is lower bounded when Advantage is negative
             loss_policy = -min(rho * advantage, pt.clip(rho, 1 - self.epsilon, 1 + self.epsilon) * advantage)
@@ -350,7 +350,7 @@ class PPO(Reinforce):
             logprobs_b = self.policy(state)
 
             # Importance sampling weight
-            rho = logprobs[action] / logprobs_b[action]
+            rho = rho_logits(logprobs, logprobs_b, action)
 
             # n-step Advantage estimate
             nae = advantages[timestep:] * discounts[:-offset]
